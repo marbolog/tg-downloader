@@ -54,50 +54,63 @@ Channels are **not** configured here — they are managed at runtime with the `s
 mkdir -p data/downloads
 ```
 
+### 3. Install dependencies
+
+```bash
+uv sync
+```
+
 ## Running with Docker (recommended)
 
 ### First-time Telegram authentication
 
-Before starting the background service, you need to authenticate once interactively. Telegram will send a confirmation code to your app:
+Before starting the background service, authenticate once interactively:
 
 ```bash
-sudo docker compose run --rm -it tg-downloader uv run python main.py listen
+uv run tgdctl auth
 ```
 
-Enter your phone number (with country code, e.g. `+39...`) and the code when prompted. Once connected and the listener starts, press `Ctrl+C`. The session is saved to `data/tg_session.session` and reused from this point on — you will never be asked again unless the session expires.
+Enter your phone number (with country code, e.g. `+39...`) and the code Telegram sends to your app. Once connected and the listener starts, press `Ctrl+C`. The session is saved to `data/tg_session.session` and reused from this point on.
 
 ### Start the background service
 
 ```bash
-sudo docker compose up -d --build
+uv run tgdctl start
 ```
 
-The container starts the listener automatically as its main process and restarts on crash or server reboot (`restart: always`).
+Builds the Docker image and starts the listener as a background service with `restart: always` — it survives crashes and server reboots.
 
-## Commands
+## Managing the service with `tgdctl`
 
-All commands are run via `docker compose exec`. Define a shell alias to keep things short:
+`tgdctl` is the host-side management tool. Always use it instead of running app commands directly — it handles the Docker lifecycle and avoids Telegram session conflicts.
+
+### Service control
 
 ```bash
-alias tgd="sudo docker compose exec -it tg-downloader uv run python main.py"
+uv run tgdctl start      # build and start the listener container
+uv run tgdctl stop       # stop the container
+uv run tgdctl restart    # restart the listener
+uv run tgdctl logs       # tail container logs (Ctrl+C to stop)
+uv run tgdctl logs -n    # print recent logs and exit
+uv run tgdctl status     # container state + per-channel download stats
 ```
 
 ### Subscribe to a channel
 
 ```bash
-tgd subscribe @channel_username
-tgd subscribe https://t.me/channel_username
-tgd subscribe -1001234567890    # numeric ID, for private channels you are a member of
+uv run tgdctl subscribe @channel_username
+uv run tgdctl subscribe https://t.me/channel_username
+uv run tgdctl subscribe -1001234567890    # numeric ID, for private channels
 ```
 
 > You must already be a member of the channel on Telegram.
 
-New subscriptions take effect immediately — no container restart needed.
+The listener is briefly paused while the channel is resolved, then automatically restarted. New subscriptions take effect immediately.
 
 ### List subscribed channels
 
 ```bash
-tgd channels
+uv run tgdctl channels
 ```
 
 ```
@@ -113,10 +126,10 @@ tgd channels
 ### Download pending media
 
 ```bash
-tgd download
+uv run tgdctl download
 ```
 
-Opens an interactive checklist of everything that has arrived since your last download session:
+The listener pauses briefly, then an interactive checklist opens with everything that has accumulated:
 
 ```
 Space=toggle  A=select all  ↑↓=navigate  Enter=confirm
@@ -128,12 +141,35 @@ Space=toggle  A=select all  ↑↓=navigate  Enter=confirm
    ...
 ```
 
-Selected files are downloaded with progress bars and marked as downloaded in the database. Unselected files remain pending and will appear again next time.
+Selected files are downloaded with progress bars and marked as downloaded. Unselected files remain pending and appear again next time. The listener restarts automatically when done.
+
+### Skip pending media
+
+```bash
+uv run tgdctl skip
+```
+
+Same interactive checklist as `download`, but marks the selected items as skipped instead of downloading them. Skipped files no longer appear in the pending list.
+
+### View download history
+
+```bash
+uv run tgdctl history           # last 20 downloads
+uv run tgdctl history --limit 50
+```
+
+### Download stats
+
+```bash
+uv run tgdctl status
+```
+
+Shows container state and a per-channel breakdown of pending, downloaded, and skipped file counts. Reads the database directly — works even when the container is stopped.
 
 ### Unsubscribe from a channel
 
 ```bash
-tgd unsubscribe @channel_username
+uv run tgdctl unsubscribe @channel_username
 ```
 
 Removes the channel from tracking. Previously recorded media messages are kept in the database.
@@ -142,12 +178,17 @@ Removes the channel from tracking. Previously recorded media messages are kept i
 
 ```bash
 uv sync
-uv run python main.py listen          # start the listener
-uv run python main.py subscribe @channel
-uv run python main.py channels
-uv run python main.py download
-uv run python main.py unsubscribe @channel
+uv run tg-downloader listen           # start the listener
+uv run tg-downloader subscribe @channel
+uv run tg-downloader channels
+uv run tg-downloader download
+uv run tg-downloader skip
+uv run tg-downloader history
+uv run tg-downloader status
+uv run tg-downloader unsubscribe @channel
 ```
+
+> Do not run these commands while the Docker listener is running — they share the same Telegram session file and will conflict. Use `tgdctl` when Docker is active.
 
 ## Project structure
 
@@ -160,6 +201,7 @@ tg-downloader/
 ├── ui.py                # interactive file selection
 ├── downloader.py        # download selected files with progress bars
 ├── utils.py             # shared helpers
+├── tgdctl.py            # host-side management CLI
 ├── config.yaml.example  # template — copy to config.yaml to get started
 ├── pyproject.toml       # dependencies managed by uv
 ├── Dockerfile
