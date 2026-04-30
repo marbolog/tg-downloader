@@ -65,22 +65,26 @@ CLI tool that scans Telegram channels for media files and lets the user interact
 - **rich** — tables, progress bars, styled output
 - **PyYAML** — config file
 
-### Entry point
+### Entry points
 ```
-uv run python main.py <subcommand>
-# subcommands: listen | subscribe | unsubscribe | channels | download
+uv run tgdctl <command>        # host-side management (Docker + DB stats)
+uv run tg-downloader <command> # app CLI (runs inside the container/venv)
+uv run python main.py <command>
+
+# app subcommands: listen | subscribe | unsubscribe | channels | download | status | skip | history
 ```
 
 ### File layout
 | File | Responsibility |
 |---|---|
-| `main.py` | Entry point; CLI subcommands (`listen`, `subscribe`, `unsubscribe`, `channels`, `download`) |
+| `main.py` | Entry point; CLI subcommands (`listen`, `subscribe`, `unsubscribe`, `channels`, `download`, `status`, `skip`, `history`) |
 | `config.py` | Load and validate `config.yaml` |
 | `db.py` | SQLite schema and all query methods (`Database` class) |
 | `listener.py` | Telethon event handler; records incoming media to DB |
 | `ui.py` | Interactive checkbox file selection (InquirerPy) |
 | `downloader.py` | Download selected files with rich progress bars |
 | `utils.py` | Pure helpers: `human_size`, `unique_path` |
+| `tgdctl.py` | Host-side management CLI; wraps docker compose + proxies app commands |
 | `config.yaml.example` | Template config — copy to `config.yaml` to start |
 
 ### Setup (Docker — recommended)
@@ -92,14 +96,20 @@ uv run python main.py <subcommand>
 4. `sudo docker compose up -d --build` — builds image, starts listener as main process with `restart: always`
 
 ### Usage (Docker)
-```bash
-# define a shorthand alias
-alias tgd="sudo docker compose exec -it tg-downloader uv run python main.py"
+Use `tgdctl` — the host-side management wrapper:
 
-tgd subscribe @channel_username
-tgd channels
-tgd download
-tgd unsubscribe @channel_username
+```bash
+uv run tgdctl start                  # build + start the listener container
+uv run tgdctl stop / restart / logs  # service control
+uv run tgdctl auth                   # first-time Telegram auth (interactive)
+uv run tgdctl status                 # container state + per-channel DB stats
+
+uv run tgdctl subscribe @channel     # subscribe to a channel
+uv run tgdctl channels               # list subscribed channels
+uv run tgdctl download               # select and download pending media
+uv run tgdctl skip                   # mark pending media as skipped
+uv run tgdctl history [--limit N]    # show recently downloaded files
+uv run tgdctl unsubscribe @channel   # unsubscribe from a channel
 ```
 Downloaded files appear in `./data/downloads/` on the host.
 

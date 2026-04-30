@@ -7,7 +7,7 @@ from utils import human_size
 console = Console()
 
 
-def select_pending_media(pending: list[dict]) -> list[dict]:
+def select_pending_media(pending: list[dict], action: str = "download") -> list[dict]:
     if not pending:
         console.print("[yellow]No pending media.[/yellow]")
         return []
@@ -20,7 +20,7 @@ def select_pending_media(pending: list[dict]) -> list[dict]:
     )
 
     return inquirer.checkbox(
-        message=f"Select media to download ({len(pending)} pending):",
+        message=f"Select media to {action} ({len(pending)} pending):",
         choices=choices,
         cycle=True,
         transformer=lambda result: f"{len(result)} file(s) selected",

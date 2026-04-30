@@ -38,12 +38,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("download", help="Choose pending media files to download")
 
+    sub.add_parser("status", help="Show download stats per channel")
+
+    sub.add_parser("skip", help="Interactively mark pending media as skipped")
+
+    p = sub.add_parser("history", help="Show recently downloaded files")
+    p.add_argument("--limit", type=int, default=20, metavar="N", help="Number of entries (default: 20)")
+
     return parser
 
 
 async def run(args) -> None:
     config = load_config("config.yaml")
     db = Database(DB_PATH)
+
+    # These commands only touch the local DB — no Telegram connection needed.
+    if args.command == "status":
+        cmd_status(db)
+        return
+    if args.command == "history":
+        cmd_history(db, args.limit)
+        return
+    if args.command == "skip":
+        cmd_skip(db)
+        return
 
     tg = config["telegram"]
     client = TelegramClient(tg["session_file"], tg["api_id"], tg["api_hash"])
@@ -116,6 +134,73 @@ def cmd_channels(db: Database) -> None:
             c["added_at"][:10],
         )
     console.print(table)
+
+
+def cmd_status(db: Database) -> None:
+    rows = db.get_status_counts()
+    if not rows:
+        console.print("[yellow]No channels subscribed.[/yellow]")
+        return
+
+    table = Table(title="Download Status")
+    table.add_column("Channel")
+    table.add_column("Pending", justify="right", style="yellow")
+    table.add_column("Downloaded", justify="right", style="green")
+    table.add_column("Skipped", justify="right", style="dim")
+    table.add_column("Total", justify="right")
+
+    totals = {"pending": 0, "downloaded": 0, "skipped": 0, "total": 0}
+    for r in rows:
+        for k in totals:
+            totals[k] += r[k] or 0
+        table.add_row(
+            r["title"],
+            str(r["pending"] or 0),
+            str(r["downloaded"] or 0),
+            str(r["skipped"] or 0),
+            str(r["total"] or 0),
+        )
+    table.add_section()
+    table.add_row(
+        "[bold]Total[/bold]",
+        f"[bold]{totals['pending']}[/bold]",
+        f"[bold]{totals['downloaded']}[/bold]",
+        f"[bold]{totals['skipped']}[/bold]",
+        f"[bold]{totals['total']}[/bold]",
+    )
+    console.print(table)
+
+
+def cmd_history(db: Database, limit: int) -> None:
+    rows = db.get_download_history(limit)
+    if not rows:
+        console.print("[yellow]No downloads yet.[/yellow]")
+        return
+
+    table = Table(title=f"Recent Downloads (last {limit})")
+    table.add_column("Date")
+    table.add_column("Channel")
+    table.add_column("File")
+    table.add_column("Saved as")
+
+    for r in rows:
+        table.add_row(
+            (r.get("date") or "")[:10],
+            (r.get("channel_title") or "")[:25],
+            (r.get("filename") or "")[:40],
+            (r.get("local_path") or "")[:60],
+        )
+    console.print(table)
+
+
+def cmd_skip(db: Database) -> None:
+    from ui import select_pending_media
+    pending = db.get_pending_media()
+    selected = select_pending_media(pending, action="skip")
+    for item in selected:
+        db.mark_skipped(item["id"])
+    if selected:
+        console.print(f"[green]Skipped {len(selected)} item(s).[/green]")
 
 
 def main() -> None:

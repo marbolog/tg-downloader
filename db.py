@@ -140,3 +140,32 @@ class Database:
             conn.execute(
                 "UPDATE media_messages SET status='skipped' WHERE id=?", (media_id,)
             )
+
+    def get_status_counts(self) -> list[dict]:
+        """Returns per-channel counts of pending/downloaded/skipped/total media."""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT c.title, c.identifier,
+                       SUM(CASE WHEN m.status='pending'    THEN 1 ELSE 0 END) AS pending,
+                       SUM(CASE WHEN m.status='downloaded' THEN 1 ELSE 0 END) AS downloaded,
+                       SUM(CASE WHEN m.status='skipped'    THEN 1 ELSE 0 END) AS skipped,
+                       COUNT(m.id) AS total
+                FROM channels c
+                LEFT JOIN media_messages m ON m.channel_id = c.id
+                GROUP BY c.id
+                ORDER BY c.added_at
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_download_history(self, limit: int = 20) -> list[dict]:
+        """Returns the most recently downloaded items, newest first."""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT m.*, c.title AS channel_title
+                FROM media_messages m
+                JOIN channels c ON m.channel_id = c.id
+                WHERE m.status = 'downloaded'
+                ORDER BY m.rowid DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(r) for r in rows]
