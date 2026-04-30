@@ -12,3 +12,9 @@ dependencies = [
 
 [project.scripts]
 tg-downloader = "main:main"
+
+[tool.uv]
+package = true
+
+[tool.setuptools]
+py-modules = ["main", "config", "db", "listener", "ui", "downloader", "utils"]

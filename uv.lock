@@ -177,7 +177,7 @@ wheels = [
 [[package]]
 name = "tg-downloader"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "inquirerpy" },
     { name = "pyyaml" },
