@@ -62,6 +62,12 @@ async def run(args) -> None:
     if args.command == "skip":
         cmd_skip(db)
         return
+    if args.command == "channels":
+        cmd_channels(db)
+        return
+    if args.command == "unsubscribe":
+        cmd_unsubscribe(db, args.channel)
+        return
 
     tg = config["telegram"]
     client = TelegramClient(tg["session_file"], tg["api_id"], tg["api_hash"])

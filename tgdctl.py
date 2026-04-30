@@ -66,21 +66,23 @@ def cmd_auth() -> int:
     )
 
 
-def cmd_download() -> int:
-    """Stop the listener to free the Telethon session lock, download, then restart."""
-    # Two Telethon clients cannot share the same SQLite session file simultaneously.
+def run_with_restart(*app_args: str) -> int:
+    """Stop the listener, run an app command in a fresh container, restart.
+
+    Needed for commands that open a Telethon client: two clients cannot share
+    the same SQLite session file simultaneously.
+    """
     print("Stopping listener to free Telegram session...")
     compose("stop", SERVICE)
     try:
-        result = subprocess.call(
+        return subprocess.call(
             ["sudo", "docker", "compose", "run", "--rm", "-it", SERVICE,
-             "uv", "run", "python", "main.py", "download"],
+             "uv", "run", "python", "main.py", *app_args],
             cwd=PROJECT_DIR,
         )
     finally:
         print("Restarting listener...")
         compose("up", "-d", SERVICE)
-    return result
 
 
 def cmd_status() -> None:
@@ -178,7 +180,7 @@ service commands:
   status     Container state + per-channel DB stats
 
 app commands (proxied into the running container):
-  subscribe  @channel    Subscribe to a channel
+  subscribe  @channel    Subscribe to a channel (pauses listener briefly)
   unsubscribe @channel   Unsubscribe from a channel
   channels               List subscribed channels
   download               Select and download pending media (pauses listener briefly)
@@ -221,13 +223,13 @@ app commands (proxied into the running container):
     elif args.command == "status":
         cmd_status()
     elif args.command == "subscribe":
-        sys.exit(app("subscribe", args.channel))
+        sys.exit(run_with_restart("subscribe", args.channel))
     elif args.command == "unsubscribe":
         sys.exit(app("unsubscribe", args.channel))
     elif args.command == "channels":
         sys.exit(app("channels"))
     elif args.command == "download":
-        sys.exit(cmd_download())
+        sys.exit(run_with_restart("download"))
     elif args.command == "skip":
         sys.exit(app("skip", interactive=True))
     elif args.command == "history":
