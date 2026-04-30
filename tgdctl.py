@@ -66,6 +66,23 @@ def cmd_auth() -> int:
     )
 
 
+def cmd_download() -> int:
+    """Stop the listener to free the Telethon session lock, download, then restart."""
+    # Two Telethon clients cannot share the same SQLite session file simultaneously.
+    print("Stopping listener to free Telegram session...")
+    compose("stop", SERVICE)
+    try:
+        result = subprocess.call(
+            ["sudo", "docker", "compose", "run", "--rm", "-it", SERVICE,
+             "uv", "run", "python", "main.py", "download"],
+            cwd=PROJECT_DIR,
+        )
+    finally:
+        print("Restarting listener...")
+        compose("up", "-d", SERVICE)
+    return result
+
+
 def cmd_status() -> None:
     compose("ps", SERVICE)
 
@@ -164,7 +181,7 @@ app commands (proxied into the running container):
   subscribe  @channel    Subscribe to a channel
   unsubscribe @channel   Unsubscribe from a channel
   channels               List subscribed channels
-  download               Select and download pending media
+  download               Select and download pending media (pauses listener briefly)
   skip                   Mark pending media as skipped
   history                Show recently downloaded files
 """,
@@ -210,7 +227,7 @@ app commands (proxied into the running container):
     elif args.command == "channels":
         sys.exit(app("channels"))
     elif args.command == "download":
-        sys.exit(app("download", interactive=True))
+        sys.exit(cmd_download())
     elif args.command == "skip":
         sys.exit(app("skip", interactive=True))
     elif args.command == "history":
