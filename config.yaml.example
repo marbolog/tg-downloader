@@ -1,0 +1,24 @@
+# Telegram API credentials — get them at https://my.telegram.org
+# Under "API Development tools", create an app to get api_id and api_hash.
+telegram:
+  api_id: 12345
+  api_hash: "your_api_hash_here"
+  session_file: "data/tg_session"   # local file that stores your login session
+
+# List of channels to scan.
+# Accepts: usernames (@channel), t.me links, or numeric channel IDs.
+channels:
+  - "@example_channel"
+  - "https://t.me/another_channel"
+  - "-1001234567890"   # numeric ID for private channels you are a member of
+
+download:
+  destination: "data/downloads"   # where files are saved; data/ is bind-mounted from the host
+  max_messages_per_channel: 500         # how many recent messages to scan
+
+# Optional extension filter. Leave empty to download all file types.
+# Extensions without the leading dot, lowercase.
+filters:
+  extensions: []
+  # examples:
+  # extensions: ["pdf", "mp4", "mkv", "jpg", "png", "zip"]

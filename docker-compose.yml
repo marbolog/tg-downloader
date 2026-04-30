@@ -1,0 +1,10 @@
+services:
+  tg-downloader:
+    build: .
+    container_name: tg-downloader
+    restart: always
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+    stdin_open: true
+    tty: true

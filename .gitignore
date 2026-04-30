@@ -1,0 +1,15 @@
+# Telegram session — treat like a password
+*.session
+data/
+
+# Config contains API secrets
+config.yaml
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# uv
+.python-version

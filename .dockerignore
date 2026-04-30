@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.session
+*.pyc
+config.yaml
+data/
+.git/
