@@ -67,40 +67,46 @@ CLI tool that scans Telegram channels for media files and lets the user interact
 
 ### Entry point
 ```
-uv run tg-downloader
-# or
-uv run python main.py
+uv run python main.py <subcommand>
+# subcommands: listen | subscribe | unsubscribe | channels | download
 ```
 
 ### File layout
 | File | Responsibility |
 |---|---|
-| `main.py` | Entry point; wires everything together |
+| `main.py` | Entry point; CLI subcommands (`listen`, `subscribe`, `unsubscribe`, `channels`, `download`) |
 | `config.py` | Load and validate `config.yaml` |
-| `scraper.py` | Telethon scan: returns `MediaItem` list per channel |
-| `ui.py` | Show scan summary table; interactive file selection |
+| `db.py` | SQLite schema and all query methods (`Database` class) |
+| `listener.py` | Telethon event handler; records incoming media to DB |
+| `ui.py` | Interactive checkbox file selection (InquirerPy) |
 | `downloader.py` | Download selected files with rich progress bars |
-| `utils.py` | Pure helpers: `human_size`, `sanitize_dirname`, `unique_path` |
+| `utils.py` | Pure helpers: `human_size`, `unique_path` |
 | `config.yaml.example` | Template config — copy to `config.yaml` to start |
 
 ### Setup (Docker — recommended)
-1. Copy `config.yaml.example` → `config.yaml`; fill in `api_id`, `api_hash`, channels
+1. Copy `config.yaml.example` → `config.yaml`; fill in `api_id`, `api_hash`
 2. `mkdir -p data/downloads`
-3. `sudo docker compose up -d --build` — builds image, starts container with `restart: always`
-4. First-time Telegram auth (interactive — phone + OTP):
-   `sudo docker compose exec -it tg-downloader uv run python main.py`
-   Session is saved to `data/tg_session.session` and reused on subsequent runs.
+3. First-time Telegram auth (interactive — phone + OTP):
+   `sudo docker compose run --rm -it tg-downloader uv run python main.py listen`
+   Session is saved to `data/tg_session.session` and reused on subsequent runs. Ctrl+C once authenticated.
+4. `sudo docker compose up -d --build` — builds image, starts listener as main process with `restart: always`
 
 ### Usage (Docker)
 ```bash
-sudo docker compose exec -it tg-downloader uv run python main.py
+# define a shorthand alias
+alias tgd="sudo docker compose exec -it tg-downloader uv run python main.py"
+
+tgd subscribe @channel_username
+tgd channels
+tgd download
+tgd unsubscribe @channel_username
 ```
 Downloaded files appear in `./data/downloads/` on the host.
 
 ### Container behaviour
 - `restart: always` — container restarts automatically on crash or server reboot
 - `./config.yaml` is bind-mounted read-only; `./data/` is bind-mounted read-write
-- The container's main process is `sleep infinity`; the tool is invoked via `exec`
+- The container's main process runs `main.py listen` (defined in `Dockerfile` CMD); use `exec` for all other commands
 
 ### Setup (local, no Docker)
 1. Copy `config.yaml.example` → `config.yaml`; fill in your values
@@ -111,6 +117,6 @@ Downloaded files appear in `./data/downloads/` on the host.
 Telethon writes a `tg_session.session` file after the first login. Subsequent runs reuse it without re-authenticating. Do not commit it.
 
 ### Known constraints
-- Can only read channels the authenticated user is a member of.
-- `max_messages_per_channel` controls how far back to scan (default 200).
+- Can only watch channels the authenticated user is a member of.
+- The listener only sees messages that arrive while it is running — there is no backfill of history on subscribe.
 - Photos from Telegram are always downloaded as JPEGs regardless of original format.
