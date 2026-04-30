@@ -9,11 +9,6 @@ def human_size(n_bytes: int) -> str:
     return f"{n_bytes:.1f} TB"
 
 
-def sanitize_dirname(name: str) -> str:
-    """Replace characters that are unsafe in directory names with underscores."""
-    return "".join(c if c.isalnum() or c in " _-" else "_" for c in name).strip()
-
-
 def unique_path(path: Path) -> Path:
     """Return path unchanged if it does not exist, otherwise append _1, _2, etc."""
     if not path.exists():

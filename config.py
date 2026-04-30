@@ -16,23 +16,16 @@ def load_config(path: str = "config.yaml") -> dict:
 
     _validate(raw, path)
     _apply_defaults(raw)
-
     return raw
 
 
 def _validate(raw: dict, path: str) -> None:
     errors = []
-
     tg = raw.get("telegram", {})
     if not tg.get("api_id") or tg["api_id"] == 12345:
         errors.append("telegram.api_id must be set to your real API id")
     if not tg.get("api_hash") or tg["api_hash"] == "your_api_hash_here":
         errors.append("telegram.api_hash must be set to your real API hash")
-
-    channels = raw.get("channels")
-    if not channels:
-        errors.append("'channels' list must not be empty")
-
     if errors:
         print(f"[error] Invalid config ({path}):")
         for e in errors:
@@ -41,19 +34,12 @@ def _validate(raw: dict, path: str) -> None:
 
 
 def _apply_defaults(raw: dict) -> None:
-    raw["telegram"].setdefault("session_file", "tg_session")
+    raw["telegram"].setdefault("session_file", "data/tg_session")
 
     dl = raw.setdefault("download", {})
-    dl.setdefault("destination", "~/Downloads/telegram")
-    dl.setdefault("max_messages_per_channel", 200)
+    dl.setdefault("destination", "data/downloads")
+    dl["destination"] = str(Path(dl["destination"]).expanduser())
 
     filters = raw.setdefault("filters", {})
     filters.setdefault("extensions", [])
-
-    # Normalize extensions: lowercase, no leading dot
-    filters["extensions"] = [
-        e.lower().lstrip(".") for e in filters["extensions"]
-    ]
-
-    # Expand ~ in destination
-    dl["destination"] = str(Path(dl["destination"]).expanduser())
+    filters["extensions"] = [e.lower().lstrip(".") for e in filters["extensions"]]

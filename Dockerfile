@@ -9,8 +9,8 @@ RUN uv sync --frozen --no-dev --no-install-project --no-cache
 # Copy source
 COPY *.py ./
 
-# data/ holds the session file and downloaded files (mounted from the host)
+# data/ holds the session file, the SQLite database, and downloaded files (mounted from host)
 RUN mkdir -p data
 
-# Keep the container alive; the tool is run interactively via docker compose exec
-CMD ["sleep", "infinity"]
+# Start the real-time listener as the main process
+CMD ["uv", "run", "python", "main.py", "listen"]

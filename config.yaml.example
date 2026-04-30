@@ -3,21 +3,15 @@
 telegram:
   api_id: 12345
   api_hash: "your_api_hash_here"
-  session_file: "data/tg_session"   # local file that stores your login session
+  session_file: "data/tg_session"   # Telegram session file (do not commit)
 
-# List of channels to scan.
-# Accepts: usernames (@channel), t.me links, or numeric channel IDs.
-channels:
-  - "@example_channel"
-  - "https://t.me/another_channel"
-  - "-1001234567890"   # numeric ID for private channels you are a member of
+# Channels are managed at runtime via the subscribe/unsubscribe commands,
+# not in this file.
 
 download:
-  destination: "data/downloads"   # where files are saved; data/ is bind-mounted from the host
-  max_messages_per_channel: 500         # how many recent messages to scan
+  destination: "data/downloads"   # where downloaded files are saved
 
-# Optional extension filter. Leave empty to download all file types.
-# Extensions without the leading dot, lowercase.
+# Optional: only track media with these extensions. Empty = track everything.
 filters:
   extensions: []
   # examples:
