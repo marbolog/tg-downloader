@@ -13,3 +13,6 @@ __pycache__/
 
 # uv
 .python-version
+
+# build artifacts
+*.egg-info/
