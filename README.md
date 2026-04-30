@@ -8,7 +8,7 @@ The tool has two separate concerns:
 
 **Listener** (always running): connects to Telegram as your user account, watches subscribed channels, and silently records every incoming media message to a local SQLite database.
 
-**Download** (on demand): you run a single command to open an interactive checklist of everything that has accumulated. Select the files you want, and they are downloaded in one shot.
+**Download** (on demand): you run a single command to open an interactive checklist of everything that has accumulated. Select the files you want and they are downloaded in one shot.
 
 ## Requirements
 
@@ -37,9 +37,10 @@ Edit `config.yaml`:
 telegram:
   api_id: 12345
   api_hash: "your_api_hash_here"
+  session_file: "data/tg_session"    # where the Telegram session is stored
 
 download:
-  destination: "data/downloads"
+  destination: "data/downloads"      # where downloaded files are saved
 
 filters:
   extensions: []   # empty = track all types; e.g. ["pdf", "mp4", "jpg"]
@@ -55,7 +56,17 @@ mkdir -p data/downloads
 
 ## Running with Docker (recommended)
 
-### Start the container
+### First-time Telegram authentication
+
+Before starting the background service, you need to authenticate once interactively. Telegram will send a confirmation code to your app:
+
+```bash
+sudo docker compose run --rm -it tg-downloader uv run python main.py listen
+```
+
+Enter your phone number (with country code, e.g. `+39...`) and the code when prompted. Once connected and the listener starts, press `Ctrl+C`. The session is saved to `data/tg_session.session` and reused from this point on — you will never be asked again unless the session expires.
+
+### Start the background service
 
 ```bash
 sudo docker compose up -d --build
@@ -63,25 +74,9 @@ sudo docker compose up -d --build
 
 The container starts the listener automatically as its main process and restarts on crash or server reboot (`restart: always`).
 
-### First-time Telegram authentication
-
-The very first run requires an interactive login — Telegram sends a confirmation code to your app:
-
-```bash
-sudo docker compose exec -it tg-downloader uv run python main.py listen
-```
-
-Enter your phone number (with country code, e.g. `+39...`) and the code. After that the session is saved to `data/tg_session.session` and reused automatically — you will never be asked again unless the session expires.
-
-Once authenticated, restart the container so it runs as a proper background service:
-
-```bash
-sudo docker compose restart
-```
-
 ## Commands
 
-All commands are run via `docker compose exec`:
+All commands are run via `docker compose exec`. Define a shell alias to keep things short:
 
 ```bash
 alias tgd="sudo docker compose exec -it tg-downloader uv run python main.py"
@@ -97,13 +92,13 @@ tgd subscribe -1001234567890    # numeric ID, for private channels you are a mem
 
 > You must already be a member of the channel on Telegram.
 
+New subscriptions take effect immediately — no container restart needed.
+
 ### List subscribed channels
 
 ```bash
 tgd channels
 ```
-
-Output:
 
 ```
          Subscribed Channels
@@ -133,7 +128,7 @@ Space=toggle  A=select all  ↑↓=navigate  Enter=confirm
    ...
 ```
 
-Selected files are downloaded with progress bars and marked as downloaded in the database. Unselected files remain pending and appear again next time.
+Selected files are downloaded with progress bars and marked as downloaded in the database. Unselected files remain pending and will appear again next time.
 
 ### Unsubscribe from a channel
 
@@ -141,15 +136,17 @@ Selected files are downloaded with progress bars and marked as downloaded in the
 tgd unsubscribe @channel_username
 ```
 
-Removes the channel. Previously recorded media messages from that channel are kept in the database.
+Removes the channel from tracking. Previously recorded media messages are kept in the database.
 
 ## Running locally (without Docker)
 
 ```bash
 uv sync
-uv run python main.py listen       # start the listener
+uv run python main.py listen          # start the listener
 uv run python main.py subscribe @channel
+uv run python main.py channels
 uv run python main.py download
+uv run python main.py unsubscribe @channel
 ```
 
 ## Project structure
@@ -163,7 +160,7 @@ tg-downloader/
 ├── ui.py                # interactive file selection
 ├── downloader.py        # download selected files with progress bars
 ├── utils.py             # shared helpers
-├── config.yaml.example  # template — copy to config.yaml
+├── config.yaml.example  # template — copy to config.yaml to get started
 ├── pyproject.toml       # dependencies managed by uv
 ├── Dockerfile
 └── docker-compose.yml
