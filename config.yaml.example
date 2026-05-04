@@ -14,5 +14,5 @@ download:
 # Optional: only track media with these extensions. Empty = track everything.
 filters:
   extensions: []
-  # examples:
-  # extensions: ["pdf", "mp4", "mkv", "jpg", "png", "zip"]
+  # ebook example:
+  # extensions: ["pdf", "epub", "mobi", "azw3", "fb2", "djvu", "djv", "cbr", "cbz"]
