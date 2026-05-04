@@ -45,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("history", help="Show recently downloaded files")
     p.add_argument("--limit", type=int, default=20, metavar="N", help="Number of entries (default: 20)")
 
+    p = sub.add_parser("scrape", help="Backfill media from channel history")
+    p.add_argument("--channel", metavar="IDENTIFIER", default=None, help="Specific channel (default: all)")
+    p.add_argument("--limit", type=int, default=None, metavar="N", help="Max messages to scan per channel (default: unlimited)")
+    p.add_argument("--since", metavar="YYYY-MM-DD", default=None, help="Stop at messages older than this date")
+
     return parser
 
 
@@ -97,6 +102,9 @@ async def run(args) -> None:
                 await download_files(client, db, selected, config["download"]["destination"])
             else:
                 console.print("[yellow]Nothing selected.[/yellow]")
+
+        elif args.command == "scrape":
+            await cmd_scrape(client, db, config, args.channel, args.limit, args.since)
     finally:
         await client.disconnect()
 
@@ -197,6 +205,58 @@ def cmd_history(db: Database, limit: int) -> None:
             (r.get("local_path") or "")[:60],
         )
     console.print(table)
+
+
+async def cmd_scrape(client: TelegramClient, db: Database, config: dict, identifier: str | None, limit: int | None, since: str | None) -> None:
+    from datetime import datetime, timezone
+    from listener import _extract_media
+
+    channels = db.list_channels()
+    if identifier:
+        channels = [c for c in channels if c["identifier"] == identifier or str(c["telegram_id"]) == identifier]
+        if not channels:
+            console.print(f"[red]Channel not found:[/red] {identifier}")
+            return
+
+    since_dt = None
+    if since:
+        since_dt = datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
+
+    allowed = set(config["filters"]["extensions"])
+    total_new = 0
+
+    for ch in channels:
+        label = f"since {since}" if since_dt else f"up to {limit} messages"
+        console.print(f"[dim]Scanning {ch['title']} ({label})…[/dim]")
+        count = 0
+        scanned = 0
+        async for message in client.iter_messages(ch["telegram_id"], limit=limit):
+            if since_dt and message.date < since_dt:
+                break
+            scanned += 1
+            if not message.media:
+                continue
+            item = _extract_media(message)
+            if item is None:
+                continue
+            if allowed and item["ext"] not in allowed:
+                continue
+            inserted = db.save_media_message(
+                channel_id=ch["id"],
+                message_id=message.id,
+                filename=item["filename"],
+                size=item["size"],
+                mime_type=item["mime_type"],
+                ext=item["ext"],
+                date=message.date.isoformat(),
+                caption=(message.message or "")[:120],
+            )
+            if inserted:
+                count += 1
+        console.print(f"  [green]+{count} new item(s)[/green] ({scanned} messages scanned)")
+        total_new += count
+
+    console.print(f"\n[green]Done — {total_new} new item(s) added to pending queue.[/green]")
 
 
 def cmd_skip(db: Database) -> None:

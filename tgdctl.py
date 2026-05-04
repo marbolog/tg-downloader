@@ -66,7 +66,7 @@ def cmd_auth() -> int:
     )
 
 
-def run_with_restart(*app_args: str) -> int:
+def run_with_restart(*app_args: str, interactive: bool = False) -> int:
     """Stop the listener, run an app command in a fresh container, restart.
 
     Needed for commands that open a Telethon client: two clients cannot share
@@ -75,8 +75,9 @@ def run_with_restart(*app_args: str) -> int:
     print("Stopping listener to free Telegram session...")
     compose("stop", SERVICE)
     try:
+        flags = ["-it"] if interactive else ["-T"]
         return subprocess.call(
-            ["sudo", "docker", "compose", "run", "--rm", "-it", SERVICE,
+            ["sudo", "docker", "compose", "run", "--rm", *flags, SERVICE,
              "uv", "run", "python", "main.py", *app_args],
             cwd=PROJECT_DIR,
         )
@@ -186,6 +187,7 @@ app commands (proxied into the running container):
   download               Select and download pending media (pauses listener briefly)
   skip                   Mark pending media as skipped
   history                Show recently downloaded files
+  scrape [--channel X] [--limit N]  Backfill media from channel history (pauses listener briefly)
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -208,6 +210,11 @@ app commands (proxied into the running container):
     p = sub.add_parser("history")
     p.add_argument("--limit", type=int, default=20, metavar="N")
 
+    p = sub.add_parser("scrape")
+    p.add_argument("--channel", metavar="IDENTIFIER", default=None)
+    p.add_argument("--limit", type=int, default=None, metavar="N")
+    p.add_argument("--since", metavar="YYYY-MM-DD", default=None)
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -229,11 +236,20 @@ app commands (proxied into the running container):
     elif args.command == "channels":
         sys.exit(app("channels"))
     elif args.command == "download":
-        sys.exit(run_with_restart("download"))
+        sys.exit(run_with_restart("download", interactive=True))
     elif args.command == "skip":
         sys.exit(app("skip", interactive=True))
     elif args.command == "history":
         sys.exit(app("history", "--limit", str(args.limit)))
+    elif args.command == "scrape":
+        extra = []
+        if args.limit is not None:
+            extra += ["--limit", str(args.limit)]
+        if args.channel:
+            extra += ["--channel", args.channel]
+        if args.since:
+            extra += ["--since", args.since]
+        sys.exit(run_with_restart("scrape", *extra))
 
 
 if __name__ == "__main__":

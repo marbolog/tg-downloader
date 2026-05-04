@@ -1,6 +1,7 @@
 import logging
 
 from telethon import TelegramClient, events
+from telethon.tl.types import PeerChannel, PeerChat
 
 from db import Database
 
@@ -31,8 +32,18 @@ async def _handle(event, db: Database, allowed_extensions: set) -> None:
     if not event.message.media:
         return
 
+    # event.chat_id uses Telethon's marked IDs (negative for channels/groups).
+    # entity.id at subscribe time is the raw positive ID. Extract it from peer_id directly.
+    peer = event.message.peer_id
+    if isinstance(peer, PeerChannel):
+        raw_id = peer.channel_id
+    elif isinstance(peer, PeerChat):
+        raw_id = peer.chat_id
+    else:
+        return  # DM, ignore
+
     # Check DB on every message so subscribe/unsubscribe takes effect without restart
-    channel = db.get_channel_by_telegram_id(event.chat_id)
+    channel = db.get_channel_by_telegram_id(raw_id)
     if channel is None:
         return
 
