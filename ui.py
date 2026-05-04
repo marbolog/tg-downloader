@@ -7,7 +7,11 @@ from utils import human_size
 
 console = Console()
 
-KEYS_HINT = "[dim]Space[/dim]=toggle  [dim]A[/dim]=all  [dim]↑↓[/dim]=navigate  [dim]Enter[/dim]=confirm\n"
+KEYS_HINT = "[dim]Space[/dim]=toggle  [dim]a[/dim]=select all  [dim]↑↓[/dim]=navigate  [dim]Enter[/dim]=confirm\n"
+
+_KEYBINDINGS = {
+    "toggle-all-true": [{"key": "a"}],
+}
 
 
 def _checkbox(message: str, choices: list, **kwargs) -> CheckboxPrompt:
@@ -45,6 +49,7 @@ async def select_download_and_skip(pending: list[dict]) -> tuple[list[dict], lis
         choices=[Choice(value=item, name=_format_choice(item)) for item in pending],
         cycle=True,
         transformer=lambda r: f"{len(r)} file(s)",
+        keybindings=_KEYBINDINGS,
     ).execute_async()
 
     # Pass 2: skip (only items not selected for download)
@@ -60,6 +65,7 @@ async def select_download_and_skip(pending: list[dict]) -> tuple[list[dict], lis
             choices=[Choice(value=item, name=_format_choice(item)) for item in remaining],
             cycle=True,
             transformer=lambda r: f"{len(r)} file(s)",
+            keybindings=_KEYBINDINGS,
         ).execute_async()
 
     return to_download, to_skip
