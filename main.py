@@ -3,10 +3,13 @@ import asyncio
 import logging
 import sys
 
+from pathlib import Path
+
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 
 from config import load_config
 from db import Database
@@ -24,6 +27,23 @@ logging.getLogger("telethon").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 DB_PATH = "data/tg_downloader.db"
+
+
+def _load_session(session_base: str) -> StringSession | str:
+    """Return a StringSession loaded from <session_base>.string if it exists.
+
+    Falls back to the plain path string so Telethon opens the legacy SQLite
+    .session file — this lets existing installs migrate without re-authing.
+    """
+    string_path = Path(session_base + ".string")
+    if string_path.exists():
+        return StringSession(string_path.read_text().strip())
+    return session_base  # Telethon treats a str as a SQLiteSession path
+
+
+def _save_session(client: TelegramClient, session_base: str) -> None:
+    """Persist the current in-memory session to <session_base>.string."""
+    Path(session_base + ".string").write_text(client.session.save())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,8 +94,12 @@ async def run(args) -> None:
         return
 
     tg = config["telegram"]
-    client = TelegramClient(tg["session_file"], tg["api_id"], tg["api_hash"])
+    session = _load_session(tg["session_file"])
+    client = TelegramClient(session, tg["api_id"], tg["api_hash"])
     await client.start()
+    # Persist session immediately — migrates legacy SQLite session to StringSession
+    # so subsequent runs never touch the SQLite session file again.
+    _save_session(client, tg["session_file"])
 
     try:
         if args.command == "listen":
@@ -109,6 +133,7 @@ async def run(args) -> None:
         elif args.command == "scrape":
             await cmd_scrape(client, db, config, args.channel, args.limit, args.since)
     finally:
+        _save_session(client, tg["session_file"])
         await client.disconnect()
 
 
