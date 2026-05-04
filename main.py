@@ -42,8 +42,26 @@ def _load_session(session_base: str) -> StringSession | str:
 
 
 def _save_session(client: TelegramClient, session_base: str) -> None:
-    """Persist the current in-memory session to <session_base>.string."""
-    Path(session_base + ".string").write_text(client.session.save())
+    """Persist the current session to <session_base>.string.
+
+    If the active session is a legacy SQLiteSession (first run), we extract its
+    credentials and export them into a new StringSession before saving.
+    """
+    if isinstance(client.session, StringSession):
+        session_str = client.session.save()
+    else:
+        # Migrate from SQLiteSession: copy dc/auth_key into a fresh StringSession.
+        migrated = StringSession()
+        migrated.set_dc(
+            client.session.dc_id,
+            client.session.server_address,
+            client.session.port,
+        )
+        migrated.auth_key = client.session.auth_key
+        session_str = migrated.save()
+
+    if session_str:
+        Path(session_base + ".string").write_text(session_str)
 
 
 def build_parser() -> argparse.ArgumentParser:
