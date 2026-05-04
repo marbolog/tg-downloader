@@ -64,6 +64,9 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 - **InquirerPy** — interactive checkbox file selection in the terminal
 - **rich** — tables, styled output
 - **PyYAML** — config file
+- **FastAPI + uvicorn** — web UI service (`webui/`)
+- **PyMuPDF** — PDF cover thumbnail extraction
+- **Pillow** — image resizing for thumbnails
 
 ### Entry points
 ```
@@ -86,6 +89,9 @@ uv run python main.py <command>
 | `utils.py` | Pure helpers: `human_size`, `unique_path` |
 | `tgdctl.py` | Host-side management CLI; wraps docker compose + proxies app commands |
 | `config.yaml.example` | Template config — copy to `config.yaml` to start |
+| `webui/app.py` | FastAPI web UI — file grid with cover previews, discard, download |
+| `webui/static/index.html` | Single-page app (vanilla JS, all inline) |
+| `webui/Dockerfile` | Separate image for the web UI service |
 
 ### Setup (Docker — recommended)
 1. Copy `config.yaml.example` → `config.yaml`; fill in `api_id`, `api_hash`
@@ -114,10 +120,26 @@ uv run tgdctl unsubscribe @channel   # unsubscribe from a channel
 ```
 Downloaded files appear in `./data/downloads/` on the host.
 
+### Web UI
+A second Docker service (`webui`) runs a FastAPI app on **port 8090** of the host:
+
+```
+http://RASPBERRY_PI_IP:8090
+```
+
+Features:
+- Responsive card grid with cover thumbnails (PDF first page, EPUB cover image)
+- Click cards to select; Select All / Clear buttons
+- Delete Selected — permanently removes files from disk and marks `discarded` in DB
+- Per-card Download button — downloads the file to the browser
+- Filter by channel; pagination (60 per page)
+- Thumbnails are cached in `data/thumbs/` and generated on first request
+
 ### Container behaviour
-- `restart: always` — container restarts automatically on crash or server reboot
+- `restart: always` — containers restart automatically on crash or server reboot
 - `./config.yaml` is bind-mounted read-only; `./data/` is bind-mounted read-write
-- The container's main process runs `main.py listen` (defined in `Dockerfile` CMD); use `exec` for all other commands
+- The downloader container's main process runs `main.py listen`; use `exec` for all other commands
+- The webui container mounts the same `./data/` and the downloads directory read-write
 
 ### Setup (local, no Docker)
 1. Copy `config.yaml.example` → `config.yaml`; fill in your values

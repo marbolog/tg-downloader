@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TG Files — Review</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --accent:       #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-light: #dbeafe;
+  --danger:       #dc2626;
+  --danger-hover: #b91c1c;
+  --bg:           #f1f5f9;
+  --surface:      #ffffff;
+  --border:       #e2e8f0;
+  --text:         #1e293b;
+  --muted:        #64748b;
+  --shadow:       0 1px 3px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
+  --shadow-lg:    0 4px 8px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.05);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* ── Header ── */
+.header {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 18px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.brand { font-weight: 700; font-size: 1rem; color: var(--accent); white-space: nowrap; }
+
+.header select {
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); font-size: .875rem; cursor: pointer; max-width: 220px;
+}
+.header select:focus { outline: none; border-color: var(--accent); }
+
+.spacer { flex: 1; min-width: 8px; }
+
+.actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.btn {
+  padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); font-size: .875rem; cursor: pointer;
+  transition: background .15s, border-color .15s, opacity .15s; white-space: nowrap;
+  font-family: inherit;
+}
+.btn:hover:not(:disabled) { background: var(--bg); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-hover); border-color: var(--danger-hover); }
+
+.sel-badge {
+  display: none; padding: 4px 10px; background: var(--accent-light);
+  color: var(--accent); border-radius: 20px; font-size: .8rem; font-weight: 600;
+}
+.sel-badge.visible { display: inline-block; }
+
+/* ── Main ── */
+.main { padding: 16px 18px; max-width: 1600px; margin: 0 auto; }
+
+.grid-meta {
+  font-size: .8rem; color: var(--muted); margin-bottom: 12px; height: 1.2em;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 14px;
+}
+
+/* ── Card ── */
+.card {
+  background: var(--surface); border-radius: 10px; box-shadow: var(--shadow);
+  overflow: hidden; cursor: pointer; position: relative;
+  border: 2px solid transparent;
+  transition: box-shadow .15s, transform .12s, border-color .12s;
+  user-select: none;
+}
+.card:hover { box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+.card.selected { border-color: var(--accent); }
+
+/* cover area — fixed portrait aspect */
+.cover {
+  position: relative; width: 100%; padding-top: 137%;
+  background: linear-gradient(160deg, #e2e8f0, #cbd5e1);
+  overflow: hidden;
+}
+.cover img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; opacity: 0; transition: opacity .25s;
+}
+.cover img.loaded { opacity: 1; }
+
+.cover-placeholder {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; pointer-events: none;
+}
+.cover-placeholder .icon { font-size: 2.4rem; line-height: 1; }
+.cover-placeholder .ext {
+  font-size: .65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted);
+}
+
+/* selection overlay */
+.cover-check {
+  position: absolute; top: 8px; right: 8px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: var(--accent); color: #fff; font-size: .8rem; font-weight: 700;
+  display: none; align-items: center; justify-content: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,.3); pointer-events: none;
+}
+.card.selected .cover-check { display: flex; }
+.card.selected .cover::after {
+  content: ''; position: absolute; inset: 0;
+  background: rgba(37,99,235,.08); pointer-events: none;
+}
+
+/* info strip */
+.info {
+  padding: 9px 10px 10px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.info-name {
+  font-size: .78rem; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.info-channel {
+  font-size: .7rem; color: var(--accent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.info-meta { font-size: .68rem; color: var(--muted); }
+.btn-dl {
+  display: block; margin-top: 7px; padding: 5px; text-align: center;
+  font-size: .72rem; border: 1px solid var(--border); border-radius: 5px;
+  color: var(--text); text-decoration: none; background: var(--bg);
+  transition: background .15s;
+}
+.btn-dl:hover { background: #e2e8f0; }
+
+/* ── Pagination ── */
+.pagination {
+  display: flex; align-items: center; justify-content: center;
+  gap: 10px; padding: 24px 0; flex-wrap: wrap;
+}
+.page-label { font-size: .875rem; color: var(--muted); }
+
+/* ── States ── */
+.empty, .loading-msg {
+  grid-column: 1 / -1; text-align: center;
+  padding: 80px 20px; color: var(--muted);
+}
+.empty h2, .loading-msg h2 { font-size: 1.1rem; margin-bottom: 6px; }
+.empty p, .loading-msg p { font-size: .875rem; }
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: 24px; left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: #1e293b; color: #fff; padding: 11px 22px; border-radius: 8px;
+  font-size: .875rem; z-index: 500; transition: transform .28s ease;
+  pointer-events: none; white-space: nowrap; box-shadow: var(--shadow-lg);
+}
+.toast.show { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="brand">TG Files</span>
+  <select id="ch-filter" title="Filter by channel"></select>
+  <span id="grid-meta" class="grid-meta"></span>
+  <div class="spacer"></div>
+  <div class="actions">
+    <button class="btn" onclick="selectAll()">Select All</button>
+    <button class="btn" onclick="clearAll()">Clear</button>
+    <span id="sel-badge" class="sel-badge"></span>
+    <button id="btn-del" class="btn btn-danger" onclick="deleteSelected()" disabled>Delete Selected</button>
+  </div>
+</header>
+
+<main class="main">
+  <div id="grid" class="grid">
+    <div class="loading-msg"><h2>Loading…</h2></div>
+  </div>
+  <div id="pagination" class="pagination"></div>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script>
+/* ── State ── */
+const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', selected: new Set() };
+
+/* ── Lazy thumbnail observer ── */
+const thumbObs = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    const img = e.target;
+    img.src = `/api/thumb/${img.dataset.id}`;
+    img.onload  = () => { img.classList.add('loaded'); img.closest('.cover')?.querySelector('.cover-placeholder')?.remove(); };
+    img.onerror = () => img.remove();
+    thumbObs.unobserve(img);
+  }
+}, { rootMargin: '400px' });
+
+/* ── Boot ── */
+async function init() {
+  const sel = document.getElementById('ch-filter');
+  sel.innerHTML = '<option value="">All channels</option>';
+  try {
+    const channels = await fetch('/api/channels').then(r => r.json());
+    for (const ch of channels) {
+      const o = document.createElement('option');
+      o.value = ch.identifier;
+      o.textContent = `${ch.title} (${ch.count})`;
+      sel.appendChild(o);
+    }
+  } catch { /* non-fatal */ }
+  sel.addEventListener('change', e => { S.channel = e.target.value; S.page = 1; S.selected.clear(); load(); });
+  await load();
+}
+
+/* ── Data ── */
+async function load() {
+  document.getElementById('grid').innerHTML = '<div class="loading-msg"><h2>Loading…</h2></div>';
+  const qs = new URLSearchParams({ page: S.page, per_page: S.perPage, channel: S.channel });
+  try {
+    const d = await fetch(`/api/files?${qs}`).then(r => r.json());
+    S.files = d.items; S.total = d.total;
+    renderGrid(); renderPagination(); syncUI();
+  } catch {
+    document.getElementById('grid').innerHTML = '<div class="empty"><h2>Failed to load</h2><p>Check server logs.</p></div>';
+  }
+}
+
+/* ── Grid ── */
+function renderGrid() {
+  const grid = document.getElementById('grid');
+  const meta = document.getElementById('grid-meta');
+  if (!S.files.length) {
+    grid.innerHTML = '<div class="empty"><h2>No downloaded files</h2><p>Files will appear here once downloaded.</p></div>';
+    meta.textContent = '';
+    return;
+  }
+  const start = (S.page - 1) * S.perPage + 1;
+  const end   = start + S.files.length - 1;
+  meta.textContent = `Showing ${start}–${end} of ${S.total.toLocaleString()} files`;
+  grid.innerHTML = '';
+  S.files.forEach(f => grid.appendChild(makeCard(f)));
+}
+
+function makeCard(f) {
+  const card = document.createElement('div');
+  card.className = 'card' + (S.selected.has(f.id) ? ' selected' : '');
+  card.dataset.id = f.id;
+
+  const ext  = (f.ext || '').toLowerCase();
+  const icon = EXT_ICON[ext] || '📁';
+  const size = fmtSize(f.size || 0);
+  const date = (f.downloaded_at || f.date || '').slice(0, 10);
+
+  card.innerHTML = `
+    <div class="cover">
+      <div class="cover-placeholder">
+        <span class="icon">${icon}</span>
+        <span class="ext">${ext || 'file'}</span>
+      </div>
+      <img data-id="${f.id}" alt="">
+      <div class="cover-check">✓</div>
+    </div>
+    <div class="info">
+      <div class="info-name" title="${esc(f.filename)}">${esc(f.filename)}</div>
+      <div class="info-channel" title="${esc(f.channel_title)}">${esc(f.channel_title)}</div>
+      <div class="info-meta">${size}${date ? ' · ' + date : ''}</div>
+      <a href="/api/download/${f.id}" class="btn-dl" onclick="event.stopPropagation()" download>⬇ Download</a>
+    </div>`;
+
+  thumbObs.observe(card.querySelector('img'));
+  card.addEventListener('click', e => { if (!e.target.closest('.btn-dl')) toggleCard(f.id, card); });
+  return card;
+}
+
+/* ── Selection ── */
+function toggleCard(id, el) {
+  S.selected.has(id) ? (S.selected.delete(id), el.classList.remove('selected'))
+                     : (S.selected.add(id),    el.classList.add('selected'));
+  syncUI();
+}
+function selectAll() {
+  S.files.forEach(f => { S.selected.add(f.id); document.querySelector(`.card[data-id="${f.id}"]`)?.classList.add('selected'); });
+  syncUI();
+}
+function clearAll() {
+  S.selected.clear();
+  document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
+  syncUI();
+}
+function syncUI() {
+  const n = S.selected.size;
+  const badge = document.getElementById('sel-badge');
+  badge.textContent = `${n} selected`;
+  badge.classList.toggle('visible', n > 0);
+  document.getElementById('btn-del').disabled = n === 0;
+}
+
+/* ── Delete ── */
+async function deleteSelected() {
+  if (!S.selected.size) return;
+  const ids = [...S.selected];
+  if (!confirm(`Permanently delete ${ids.length} file${ids.length > 1 ? 's' : ''} from disk?\nThis cannot be undone.`)) return;
+
+  try {
+    const r = await fetch('/api/discard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }).then(r => r.json());
+
+    toast(`Deleted ${r.deleted} of ${r.total} file${r.total > 1 ? 's' : ''}`);
+    ids.forEach(id => document.querySelector(`.card[data-id="${id}"]`)?.remove());
+    S.files  = S.files.filter(f => !ids.includes(f.id));
+    S.total -= ids.length;
+    S.selected.clear();
+
+    const meta  = document.getElementById('grid-meta');
+    const start = (S.page - 1) * S.perPage + 1;
+    const end   = start + S.files.length - 1;
+    meta.textContent = S.files.length ? `Showing ${start}–${end} of ${S.total.toLocaleString()} files` : '';
+    if (!S.files.length) load();
+    renderPagination();
+    syncUI();
+  } catch { toast('Delete failed — check server logs'); }
+}
+
+/* ── Pagination ── */
+function renderPagination() {
+  const pages = Math.ceil(S.total / S.perPage);
+  const pag = document.getElementById('pagination');
+  pag.innerHTML = '';
+  if (pages <= 1) return;
+
+  const mkBtn = (label, page, primary) => {
+    const b = document.createElement('button');
+    b.className = 'btn' + (primary ? ' btn-primary' : '');
+    b.textContent = label; b.disabled = page < 1 || page > pages;
+    b.onclick = () => { S.page = page; S.selected.clear(); load(); scrollTo(0, 0); };
+    return b;
+  };
+  pag.appendChild(mkBtn('← Prev', S.page - 1, false));
+  const lbl = document.createElement('span');
+  lbl.className = 'page-label'; lbl.textContent = `Page ${S.page} of ${pages}`;
+  pag.appendChild(lbl);
+  pag.appendChild(mkBtn('Next →', S.page + 1, true));
+}
+
+/* ── Helpers ── */
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3200);
+}
+function fmtSize(b) {
+  if (!b) return '';
+  const u = ['B','KB','MB','GB'], i = Math.min(Math.floor(Math.log(b) / Math.log(1024)), 3);
+  return (b / 1024**i).toFixed(i ? 1 : 0) + ' ' + u[i];
+}
+function esc(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+const EXT_ICON = {
+  pdf:'📄', epub:'📚', mobi:'📚', azw:'📚', azw3:'📚', fb2:'📚', djvu:'📖', djv:'📖',
+  cbr:'📕', cbz:'📕',
+  jpg:'🖼', jpeg:'🖼', png:'🖼', gif:'🖼', webp:'🖼',
+  mp4:'🎬', mkv:'🎬', avi:'🎬', mov:'🎬',
+  mp3:'🎵', flac:'🎵', ogg:'🎵', wav:'🎵',
+  zip:'🗜', rar:'🗜', '7z':'🗜',
+  doc:'📝', docx:'📝', xls:'📊', xlsx:'📊',
+};
+
+init();
+</script>
+</body>
+</html>

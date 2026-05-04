@@ -9,3 +9,13 @@ services:
       - /srv/share/tg-downloads:/srv/share/tg-downloads
     stdin_open: true
     tty: true
+
+  webui:
+    build: ./webui
+    container_name: tg-webui
+    restart: always
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./data:/app/data
+      - /srv/share/tg-downloads:/srv/share/tg-downloads
