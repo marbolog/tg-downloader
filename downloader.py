@@ -9,7 +9,7 @@ from utils import human_size, unique_path
 
 log = logging.getLogger(__name__)
 
-CONCURRENT_DOWNLOADS = 3
+CONCURRENT_DOWNLOADS = 1
 
 
 async def download_item(

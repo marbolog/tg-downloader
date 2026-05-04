@@ -156,7 +156,7 @@ On each `listen` startup the listener:
 3. **Real-time** — downloads new messages immediately as they arrive via `asyncio.create_task`.
 4. **Retention cleanup** — runs once on startup then every hour; deletes files older than `download.retention_days` days (set to 0 to disable).
 
-`downloader.py` limits concurrency to `CONCURRENT_DOWNLOADS = 3` via `asyncio.Semaphore`. Raise to saturate faster connections; keep low (1–3) to avoid Telegram FloodWait errors.
+`downloader.py` limits concurrency to `CONCURRENT_DOWNLOADS = 1` via `asyncio.Semaphore`. Raise to 3 on faster connections; keep at 1 on Raspberry Pi — each concurrent download runs Telethon's MTProto crypto in software AES, which pegs ARM cores and spins the fan under sustained backfill load.
 
 ### Media statuses in DB
 | Status | Meaning |
