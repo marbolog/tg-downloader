@@ -65,7 +65,7 @@ async def run(args) -> None:
         cmd_history(db, args.limit)
         return
     if args.command == "skip":
-        cmd_skip(db)
+        await cmd_skip(db)
         return
     if args.command == "channels":
         cmd_channels(db)
@@ -97,7 +97,7 @@ async def run(args) -> None:
             from ui import select_pending_media
             from downloader import download_files
             pending = db.get_pending_media()
-            selected = select_pending_media(pending)
+            selected = await select_pending_media(pending)
             if selected:
                 await download_files(client, db, selected, config["download"]["destination"])
             else:
@@ -259,10 +259,10 @@ async def cmd_scrape(client: TelegramClient, db: Database, config: dict, identif
     console.print(f"\n[green]Done — {total_new} new item(s) added to pending queue.[/green]")
 
 
-def cmd_skip(db: Database) -> None:
+async def cmd_skip(db: Database) -> None:
     from ui import select_pending_media
     pending = db.get_pending_media()
-    selected = select_pending_media(pending, action="skip")
+    selected = await select_pending_media(pending, action="skip")
     for item in selected:
         db.mark_skipped(item["id"])
     if selected:
