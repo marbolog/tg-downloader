@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from db import Database
 from utils import unique_path
 
 log = logging.getLogger(__name__)
+
+CONCURRENT_DOWNLOADS = 3
 
 
 async def download_files(
@@ -44,6 +47,8 @@ async def download_files(
             log.warning(f"Cannot resolve channel {identifier!r}: {exc}")
             channel_entities[cid] = None
 
+    semaphore = asyncio.Semaphore(CONCURRENT_DOWNLOADS)
+
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -53,12 +58,13 @@ async def download_files(
         console=console,
         transient=False,
     ) as progress:
-        for item in selected_items:
+
+        async def download_one(item: dict) -> None:
             entity = channel_entities.get(item["channel_telegram_id"])
             if entity is None:
                 console.print(f"[red]  Skipping {item['filename']}: channel not resolvable[/red]")
                 failed.append(item)
-                continue
+                return
 
             filepath = unique_path(dest / item["filename"])
             task_id = progress.add_task(
@@ -71,22 +77,25 @@ async def download_files(
                     progress.update(tid, completed=current, total=total or size_hint or None)
                 return cb
 
-            try:
-                message = await client.get_messages(entity, ids=item["message_id"])
-                if message is None:
-                    raise ValueError("Message not found — it may have been deleted")
+            async with semaphore:
+                try:
+                    message = await client.get_messages(entity, ids=item["message_id"])
+                    if message is None:
+                        raise ValueError("Message not found — it may have been deleted")
 
-                await client.download_media(
-                    message,
-                    file=str(filepath),
-                    progress_callback=make_cb(task_id, item.get("size")),
-                )
-                db.mark_downloaded(item["id"], str(filepath))
-                log.info(f"Downloaded: {filepath}")
-            except Exception as exc:
-                log.error(f"Failed to download {item['filename']!r}: {exc}")
-                console.print(f"[red]  Error: {item['filename']}: {exc}[/red]")
-                failed.append(item)
+                    await client.download_media(
+                        message,
+                        file=str(filepath),
+                        progress_callback=make_cb(task_id, item.get("size")),
+                    )
+                    db.mark_downloaded(item["id"], str(filepath))
+                    log.info(f"Downloaded: {filepath}")
+                except Exception as exc:
+                    log.error(f"Failed to download {item['filename']!r}: {exc}")
+                    console.print(f"[red]  Error: {item['filename']}: {exc}[/red]")
+                    failed.append(item)
+
+        await asyncio.gather(*[download_one(item) for item in selected_items])
 
     console.print(
         f"\n[green]Downloaded {len(selected_items) - len(failed)}/{len(selected_items)} file(s)[/green]"

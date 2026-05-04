@@ -126,6 +126,9 @@ Downloaded files appear in `./data/downloads/` on the host.
 ### Session file
 Telethon writes a `tg_session.session` file after the first login. Subsequent runs reuse it without re-authenticating. Do not commit it.
 
+### Download concurrency
+`downloader.py` downloads up to `CONCURRENT_DOWNLOADS = 3` files in parallel using `asyncio.Semaphore` + `asyncio.gather`. Raise the constant to saturate faster connections; keep it low (1–3) to avoid Telegram FloodWait errors.
+
 ### Known constraints
 - Can only watch channels the authenticated user is a member of.
 - The listener only sees messages that arrive while it is running — there is no backfill of history on subscribe.
