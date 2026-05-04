@@ -34,51 +34,82 @@ body {
   position: sticky; top: 0; z-index: 100;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  padding: 10px 18px;
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px;
+  display: flex; align-items: center; gap: 8px;
 }
-.brand { font-weight: 700; font-size: 1rem; color: var(--accent); white-space: nowrap; }
+.brand { font-weight: 700; font-size: 1rem; color: var(--accent); white-space: nowrap; flex-shrink: 0; }
 
 .header select {
-  padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface); font-size: .875rem; cursor: pointer; max-width: 220px;
+  flex: 1; min-width: 0;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); font-size: .875rem; cursor: pointer;
 }
 .header select:focus { outline: none; border-color: var(--accent); }
 
-.spacer { flex: 1; min-width: 8px; }
-
-.actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* desktop-only actions in header */
+.header-actions {
+  display: none;
+  align-items: center; gap: 8px; flex-shrink: 0;
+}
+@media (min-width: 640px) {
+  .header-actions { display: flex; }
+}
 
 .btn {
-  padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--surface); font-size: .875rem; cursor: pointer;
-  transition: background .15s, border-color .15s, opacity .15s; white-space: nowrap;
-  font-family: inherit;
+  transition: background .15s, border-color .15s, opacity .15s;
+  white-space: nowrap; font-family: inherit; touch-action: manipulation;
 }
 .btn:hover:not(:disabled) { background: var(--bg); }
+.btn:active:not(:disabled) { opacity: .75; }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
-.btn-danger:hover:not(:disabled) { background: var(--danger-hover); border-color: var(--danger-hover); }
+.btn-danger  { background: var(--danger);  color: #fff; border-color: var(--danger); }
+.btn-danger:hover:not(:disabled)  { background: var(--danger-hover);  border-color: var(--danger-hover); }
 
 .sel-badge {
   display: none; padding: 4px 10px; background: var(--accent-light);
   color: var(--accent); border-radius: 20px; font-size: .8rem; font-weight: 600;
+  white-space: nowrap;
 }
 .sel-badge.visible { display: inline-block; }
 
-/* ── Main ── */
-.main { padding: 16px 18px; max-width: 1600px; margin: 0 auto; }
-
-.grid-meta {
-  font-size: .8rem; color: var(--muted); margin-bottom: 12px; height: 1.2em;
+/* ── Mobile bottom action bar ── */
+.mob-bar {
+  display: none;
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+  background: var(--surface); border-top: 2px solid var(--accent);
+  padding: 10px 14px; gap: 8px; align-items: center;
+  box-shadow: 0 -2px 10px rgba(0,0,0,.12);
 }
+.mob-bar-count {
+  font-size: .85rem; font-weight: 600; color: var(--accent);
+  flex-shrink: 0;
+}
+.mob-bar .spacer { flex: 1; }
+@media (max-width: 639px) {
+  .mob-bar.visible { display: flex; }
+  /* push grid content above the fixed bar */
+  .main { padding-bottom: 72px; }
+}
+
+/* ── Main ── */
+.main { padding: 12px 14px; max-width: 1600px; margin: 0 auto; }
+
+.grid-meta { font-size: .78rem; color: var(--muted); margin-bottom: 10px; min-height: 1.1em; }
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 12px;
+}
+@media (min-width: 480px) {
+  .grid { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 14px; }
+}
+@media (min-width: 900px) {
+  .grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 }
 
 /* ── Card ── */
@@ -86,13 +117,18 @@ body {
   background: var(--surface); border-radius: 10px; box-shadow: var(--shadow);
   overflow: hidden; cursor: pointer; position: relative;
   border: 2px solid transparent;
-  transition: box-shadow .15s, transform .12s, border-color .12s;
-  user-select: none;
+  transition: box-shadow .15s, border-color .12s;
+  user-select: none; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
-.card:hover { box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+/* hover lift only on pointer devices */
+@media (hover: hover) {
+  .card:hover { box-shadow: var(--shadow-lg); }
+}
+.card:active { opacity: .9; }
 .card.selected { border-color: var(--accent); }
 
-/* cover area — fixed portrait aspect */
+/* cover — portrait aspect */
 .cover {
   position: relative; width: 100%; padding-top: 137%;
   background: linear-gradient(160deg, #e2e8f0, #cbd5e1);
@@ -109,15 +145,14 @@ body {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; pointer-events: none;
 }
-.cover-placeholder .icon { font-size: 2.4rem; line-height: 1; }
+.cover-placeholder .icon { font-size: 2.2rem; line-height: 1; }
 .cover-placeholder .ext {
-  font-size: .65rem; font-weight: 700; text-transform: uppercase;
+  font-size: .62rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: .08em; color: var(--muted);
 }
 
-/* selection overlay */
 .cover-check {
-  position: absolute; top: 8px; right: 8px;
+  position: absolute; top: 7px; right: 7px;
   width: 24px; height: 24px; border-radius: 50%;
   background: var(--accent); color: #fff; font-size: .8rem; font-weight: 700;
   display: none; align-items: center; justify-content: center;
@@ -126,30 +161,29 @@ body {
 .card.selected .cover-check { display: flex; }
 .card.selected .cover::after {
   content: ''; position: absolute; inset: 0;
-  background: rgba(37,99,235,.08); pointer-events: none;
+  background: rgba(37,99,235,.09); pointer-events: none;
 }
 
 /* info strip */
-.info {
-  padding: 9px 10px 10px;
-  display: flex; flex-direction: column; gap: 2px;
-}
+.info { padding: 8px 9px 9px; display: flex; flex-direction: column; gap: 2px; }
 .info-name {
-  font-size: .78rem; font-weight: 600; color: var(--text);
+  font-size: .76rem; font-weight: 600; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .info-channel {
-  font-size: .7rem; color: var(--accent);
+  font-size: .68rem; color: var(--accent);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.info-meta { font-size: .68rem; color: var(--muted); }
+.info-meta { font-size: .66rem; color: var(--muted); }
 .btn-dl {
-  display: block; margin-top: 7px; padding: 5px; text-align: center;
+  display: block; margin-top: 7px; padding: 7px 5px; text-align: center;
   font-size: .72rem; border: 1px solid var(--border); border-radius: 5px;
   color: var(--text); text-decoration: none; background: var(--bg);
-  transition: background .15s;
+  transition: background .15s; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .btn-dl:hover { background: #e2e8f0; }
+.btn-dl:active { opacity: .7; }
 
 /* ── Pagination ── */
 .pagination {
@@ -160,11 +194,10 @@ body {
 
 /* ── States ── */
 .empty, .loading-msg {
-  grid-column: 1 / -1; text-align: center;
-  padding: 80px 20px; color: var(--muted);
+  grid-column: 1 / -1; text-align: center; padding: 80px 20px; color: var(--muted);
 }
 .empty h2, .loading-msg h2 { font-size: 1.1rem; margin-bottom: 6px; }
-.empty p, .loading-msg p { font-size: .875rem; }
+.empty p,  .loading-msg p  { font-size: .875rem; }
 
 /* ── Toast ── */
 .toast {
@@ -175,6 +208,10 @@ body {
   pointer-events: none; white-space: nowrap; box-shadow: var(--shadow-lg);
 }
 .toast.show { transform: translateX(-50%) translateY(0); }
+@media (max-width: 639px) {
+  /* push toast above the mobile action bar */
+  .toast { bottom: 80px; }
+}
 </style>
 </head>
 <body>
@@ -182,9 +219,7 @@ body {
 <header class="header">
   <span class="brand">TG Files</span>
   <select id="ch-filter" title="Filter by channel"></select>
-  <span id="grid-meta" class="grid-meta"></span>
-  <div class="spacer"></div>
-  <div class="actions">
+  <div class="header-actions">
     <button class="btn" onclick="selectAll()">Select All</button>
     <button class="btn" onclick="clearAll()">Clear</button>
     <span id="sel-badge" class="sel-badge"></span>
@@ -192,7 +227,17 @@ body {
   </div>
 </header>
 
+<!-- mobile bottom bar, shown only when items are selected -->
+<div id="mob-bar" class="mob-bar">
+  <span id="mob-count" class="mob-bar-count"></span>
+  <div class="spacer"></div>
+  <button class="btn" onclick="selectAll()">All</button>
+  <button class="btn" onclick="clearAll()">Clear</button>
+  <button class="btn btn-danger" onclick="deleteSelected()">Delete</button>
+</div>
+
 <main class="main">
+  <div id="grid-meta" class="grid-meta"></div>
   <div id="grid" class="grid">
     <div class="loading-msg"><h2>Loading…</h2></div>
   </div>
@@ -311,10 +356,17 @@ function clearAll() {
 }
 function syncUI() {
   const n = S.selected.size;
+
+  // desktop badge + button
   const badge = document.getElementById('sel-badge');
   badge.textContent = `${n} selected`;
   badge.classList.toggle('visible', n > 0);
   document.getElementById('btn-del').disabled = n === 0;
+
+  // mobile bottom bar
+  const bar = document.getElementById('mob-bar');
+  bar.classList.toggle('visible', n > 0);
+  document.getElementById('mob-count').textContent = `${n} selected`;
 }
 
 /* ── Delete ── */
