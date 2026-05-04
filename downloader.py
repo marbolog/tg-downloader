@@ -16,7 +16,6 @@ from db import Database
 from utils import unique_path
 
 log = logging.getLogger(__name__)
-console = Console()
 
 
 async def download_files(
@@ -24,6 +23,7 @@ async def download_files(
     db: Database,
     selected_items: list[dict],
     destination: str,
+    console: Console,
 ) -> None:
     dest = Path(destination)
     dest.mkdir(parents=True, exist_ok=True)

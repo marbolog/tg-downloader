@@ -4,6 +4,7 @@ import logging
 import sys
 
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.table import Table
 from telethon import TelegramClient
 
@@ -14,9 +15,12 @@ console = Console()
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s",
+    format="%(message)s",
     datefmt="%H:%M:%S",
+    handlers=[RichHandler(console=console, show_path=False)],
 )
+# Telethon is very chatty at INFO; its reconnection noise isn't useful to the user.
+logging.getLogger("telethon").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 DB_PATH = "data/tg_downloader.db"
@@ -98,7 +102,7 @@ async def run(args) -> None:
             if to_skip:
                 console.print(f"[dim]Skipped {len(to_skip)} item(s).[/dim]")
             if to_download:
-                await download_files(client, db, to_download, config["download"]["destination"])
+                await download_files(client, db, to_download, config["download"]["destination"], console)
             elif not to_skip:
                 console.print("[yellow]Nothing selected.[/yellow]")
 
