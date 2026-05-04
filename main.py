@@ -78,14 +78,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("channels", help="List subscribed channels and pending counts")
 
-    sub.add_parser("download", help="Select pending media to download or skip")
+    sub.add_parser("discard", help="Review downloaded files and delete unwanted ones")
 
     sub.add_parser("status", help="Show download stats per channel")
 
     p = sub.add_parser("history", help="Show recently downloaded files")
     p.add_argument("--limit", type=int, default=20, metavar="N", help="Number of entries (default: 20)")
 
-    p = sub.add_parser("scrape", help="Backfill media from channel history")
+    p = sub.add_parser("scrape", help="Backfill media from channel history into the pending queue")
     p.add_argument("--channel", metavar="IDENTIFIER", default=None, help="Specific channel (default: all)")
     p.add_argument("--limit", type=int, default=None, metavar="N", help="Max messages to scan per channel (default: unlimited)")
     p.add_argument("--since", metavar="YYYY-MM-DD", default=None, help="Stop at messages older than this date")
@@ -110,6 +110,23 @@ async def run(args) -> None:
     if args.command == "unsubscribe":
         cmd_unsubscribe(db, args.channel)
         return
+    if args.command == "discard":
+        from ui import select_discard
+        downloaded = db.get_downloaded_media()
+        to_delete = await select_discard(downloaded)
+        if to_delete:
+            deleted = 0
+            for item in to_delete:
+                if item.get("local_path"):
+                    p = Path(item["local_path"])
+                    if p.exists():
+                        p.unlink()
+                        deleted += 1
+                db.mark_discarded(item["id"])
+            console.print(f"[green]Deleted {deleted}/{len(to_delete)} file(s).[/green]")
+        else:
+            console.print("[dim]Nothing deleted.[/dim]")
+        return
 
     tg = config["telegram"]
     session = _load_session(tg["session_file"])
@@ -122,31 +139,10 @@ async def run(args) -> None:
     try:
         if args.command == "listen":
             from listener import run_listener
-            allowed = set(config["filters"]["extensions"])
-            await run_listener(client, db, allowed)
+            await run_listener(client, db, config)
 
         elif args.command == "subscribe":
             await cmd_subscribe(client, db, args.channel)
-
-        elif args.command == "unsubscribe":
-            cmd_unsubscribe(db, args.channel)
-
-        elif args.command == "channels":
-            cmd_channels(db)
-
-        elif args.command == "download":
-            from ui import select_download_and_skip
-            from downloader import download_files
-            pending = db.get_pending_media()
-            to_download, to_skip = await select_download_and_skip(pending)
-            for item in to_skip:
-                db.mark_skipped(item["id"])
-            if to_skip:
-                console.print(f"[dim]Skipped {len(to_skip)} item(s).[/dim]")
-            if to_download:
-                await download_files(client, db, to_download, config["download"]["destination"], console)
-            elif not to_skip:
-                console.print("[yellow]Nothing selected.[/yellow]")
 
         elif args.command == "scrape":
             await cmd_scrape(client, db, config, args.channel, args.limit, args.since)
@@ -204,28 +200,31 @@ def cmd_status(db: Database) -> None:
 
     table = Table(title="Download Status")
     table.add_column("Channel")
+    table.add_column("On Disk", justify="right", style="green")
     table.add_column("Pending", justify="right", style="yellow")
-    table.add_column("Downloaded", justify="right", style="green")
-    table.add_column("Skipped", justify="right", style="dim")
+    table.add_column("Removed", justify="right", style="dim")
     table.add_column("Total", justify="right")
 
-    totals = {"pending": 0, "downloaded": 0, "skipped": 0, "total": 0}
+    totals = {"downloaded": 0, "pending": 0, "removed": 0, "total": 0}
     for r in rows:
-        for k in totals:
-            totals[k] += r[k] or 0
+        removed = (r["discarded"] or 0) + (r["expired"] or 0) + (r["skipped"] or 0)
+        totals["downloaded"] += r["downloaded"] or 0
+        totals["pending"] += r["pending"] or 0
+        totals["removed"] += removed
+        totals["total"] += r["total"] or 0
         table.add_row(
             r["title"],
-            str(r["pending"] or 0),
             str(r["downloaded"] or 0),
-            str(r["skipped"] or 0),
+            str(r["pending"] or 0),
+            str(removed),
             str(r["total"] or 0),
         )
     table.add_section()
     table.add_row(
         "[bold]Total[/bold]",
-        f"[bold]{totals['pending']}[/bold]",
         f"[bold]{totals['downloaded']}[/bold]",
-        f"[bold]{totals['skipped']}[/bold]",
+        f"[bold]{totals['pending']}[/bold]",
+        f"[bold]{totals['removed']}[/bold]",
         f"[bold]{totals['total']}[/bold]",
     )
     console.print(table)
@@ -238,14 +237,14 @@ def cmd_history(db: Database, limit: int) -> None:
         return
 
     table = Table(title=f"Recent Downloads (last {limit})")
-    table.add_column("Date")
+    table.add_column("Downloaded")
     table.add_column("Channel")
     table.add_column("File")
     table.add_column("Saved as")
 
     for r in rows:
         table.add_row(
-            (r.get("date") or "")[:10],
+            (r.get("downloaded_at") or r.get("date") or "")[:16],
             (r.get("channel_title") or "")[:25],
             (r.get("filename") or "")[:40],
             (r.get("local_path") or "")[:60],
@@ -253,7 +252,14 @@ def cmd_history(db: Database, limit: int) -> None:
     console.print(table)
 
 
-async def cmd_scrape(client: TelegramClient, db: Database, config: dict, identifier: str | None, limit: int | None, since: str | None) -> None:
+async def cmd_scrape(
+    client: TelegramClient,
+    db: Database,
+    config: dict,
+    identifier: str | None,
+    limit: int | None,
+    since: str | None,
+) -> None:
     from datetime import datetime, timezone
     from listener import _extract_media
 
@@ -272,7 +278,7 @@ async def cmd_scrape(client: TelegramClient, db: Database, config: dict, identif
     total_new = 0
 
     for ch in channels:
-        label = f"since {since}" if since_dt else f"up to {limit} messages"
+        label = f"since {since}" if since_dt else f"up to {limit} messages" if limit else "all history"
         console.print(f"[dim]Scanning {ch['title']} ({label})…[/dim]")
         count = 0
         scanned = 0
@@ -302,7 +308,10 @@ async def cmd_scrape(client: TelegramClient, db: Database, config: dict, identif
         console.print(f"  [green]+{count} new item(s)[/green] ({scanned} messages scanned)")
         total_new += count
 
-    console.print(f"\n[green]Done — {total_new} new item(s) added to pending queue.[/green]")
+    console.print(
+        f"\n[green]Done — {total_new} new item(s) queued. "
+        f"Will be downloaded when the listener next starts.[/green]"
+    )
 
 
 def main() -> None:

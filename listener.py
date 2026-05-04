@@ -1,17 +1,33 @@
+import asyncio
 import logging
+from pathlib import Path
 
 from telethon import TelegramClient, events
 from telethon.tl.types import PeerChannel, PeerChat
 
 from db import Database
+from downloader import download_item, CONCURRENT_DOWNLOADS
 
 log = logging.getLogger(__name__)
 
 
-async def run_listener(
-    client: TelegramClient, db: Database, allowed_extensions: set
-) -> None:
+async def run_listener(client: TelegramClient, db: Database, config: dict) -> None:
     """Start the real-time listener. Blocks until the client disconnects."""
+    destination = Path(config["download"]["destination"])
+    allowed = set(config["filters"]["extensions"])
+    retention_days = config["download"]["retention_days"]
+    destination.mkdir(parents=True, exist_ok=True)
+    semaphore = asyncio.Semaphore(CONCURRENT_DOWNLOADS)
+
+    # Download any items that were recorded but not yet downloaded in a previous session.
+    await _flush_pending(client, db, destination, semaphore)
+
+    # Fetch and download messages that arrived while the service was down.
+    await _backfill_missed(client, db, allowed, destination, semaphore)
+
+    # Schedule the hourly retention cleanup as a background task.
+    asyncio.create_task(_cleanup_loop(db, retention_days))
+
     channels = db.list_channels()
     log.info(f"Listening — {len(channels)} subscribed channel(s)")
     for c in channels:
@@ -20,7 +36,7 @@ async def run_listener(
     @client.on(events.NewMessage)
     async def on_new_message(event):
         try:
-            await _handle(event, db, allowed_extensions)
+            await _handle(event, db, allowed, client, destination, semaphore)
         except Exception as exc:
             log.error(f"Error handling message {event.message.id}: {exc}", exc_info=True)
 
@@ -28,7 +44,122 @@ async def run_listener(
     await client.run_until_disconnected()
 
 
-async def _handle(event, db: Database, allowed_extensions: set) -> None:
+async def _flush_pending(
+    client: TelegramClient, db: Database, dest: Path, semaphore: asyncio.Semaphore
+) -> None:
+    """Download all items that are pending in the DB (e.g. from a previous scrape)."""
+    pending = db.get_pending_media()
+    if not pending:
+        return
+    log.info(f"Flushing {len(pending)} pending item(s) from previous session(s)...")
+    results = await asyncio.gather(
+        *[download_item(client, db, item, dest, semaphore) for item in pending],
+        return_exceptions=True,
+    )
+    ok = sum(1 for r in results if r is True)
+    log.info(f"Flush complete: {ok}/{len(pending)} succeeded")
+
+
+async def _backfill_missed(
+    client: TelegramClient,
+    db: Database,
+    allowed: set,
+    dest: Path,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    """Fetch messages that arrived while the service was down and download them."""
+    for ch in db.list_channels():
+        max_id = db.get_max_message_id(ch["id"])
+        if max_id is None:
+            # No prior messages recorded — no reference point for gap detection.
+            # Use the scrape command to do an initial history pull.
+            continue
+
+        try:
+            entity = await client.get_entity(ch["identifier"])
+        except Exception as exc:
+            log.warning(f"Backfill: cannot resolve {ch['identifier']!r}: {exc}")
+            continue
+
+        tasks = []
+        async for message in client.iter_messages(entity, min_id=max_id):
+            if not message.media:
+                continue
+            item_meta = _extract_media(message)
+            if item_meta is None:
+                continue
+            if allowed and item_meta["ext"] not in allowed:
+                continue
+            db_id = db.save_media_message(
+                channel_id=ch["id"],
+                message_id=message.id,
+                filename=item_meta["filename"],
+                size=item_meta["size"],
+                mime_type=item_meta["mime_type"],
+                ext=item_meta["ext"],
+                date=message.date.isoformat(),
+                caption=(message.message or "")[:120],
+            )
+            if db_id:
+                tasks.append(download_item(
+                    client, db,
+                    {
+                        "id": db_id,
+                        "channel_identifier": ch["identifier"],
+                        "channel_telegram_id": ch["telegram_id"],
+                        "channel_title": ch["title"],
+                        "message_id": message.id,
+                        "filename": item_meta["filename"],
+                        "size": item_meta["size"],
+                    },
+                    dest, semaphore, message=message,
+                ))
+
+        if tasks:
+            log.info(f"Backfilling {len(tasks)} missed item(s) from {ch['title']}...")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            ok = sum(1 for r in results if r is True)
+            log.info(f"Backfill {ch['title']}: {ok}/{len(tasks)} succeeded")
+
+
+async def _cleanup_loop(db: Database, retention_days: int) -> None:
+    """Run retention cleanup once on startup, then every hour. No-op if retention_days <= 0."""
+    if retention_days <= 0:
+        return
+    while True:
+        try:
+            _run_cleanup(db, retention_days)
+        except Exception as exc:
+            log.error(f"Cleanup error: {exc}", exc_info=True)
+        await asyncio.sleep(3600)
+
+
+def _run_cleanup(db: Database, retention_days: int) -> None:
+    expired = db.get_expired_files(retention_days)
+    if not expired:
+        return
+    deleted = 0
+    for item in expired:
+        if item.get("local_path"):
+            p = Path(item["local_path"])
+            if p.exists():
+                p.unlink()
+                deleted += 1
+        db.mark_expired(item["id"])
+    log.info(
+        f"Retention cleanup: {deleted} file(s) deleted, "
+        f"{len(expired)} record(s) marked expired (>{retention_days}d)"
+    )
+
+
+async def _handle(
+    event,
+    db: Database,
+    allowed: set,
+    client: TelegramClient,
+    dest: Path,
+    semaphore: asyncio.Semaphore,
+) -> None:
     if not event.message.media:
         return
 
@@ -42,31 +173,44 @@ async def _handle(event, db: Database, allowed_extensions: set) -> None:
     else:
         return  # DM, ignore
 
-    # Check DB on every message so subscribe/unsubscribe takes effect without restart
+    # Check DB on every message so subscribe/unsubscribe takes effect without restart.
     channel = db.get_channel_by_telegram_id(raw_id)
     if channel is None:
         return
 
-    item = _extract_media(event.message)
-    if item is None:
+    item_meta = _extract_media(event.message)
+    if item_meta is None:
         return
 
-    if allowed_extensions and item["ext"] not in allowed_extensions:
-        log.debug(f"Skipping {item['filename']!r}: extension not in filter")
+    if allowed and item_meta["ext"] not in allowed:
+        log.debug(f"Skipping {item_meta['filename']!r}: extension not in filter")
         return
 
-    inserted = db.save_media_message(
+    db_id = db.save_media_message(
         channel_id=channel["id"],
         message_id=event.message.id,
-        filename=item["filename"],
-        size=item["size"],
-        mime_type=item["mime_type"],
-        ext=item["ext"],
+        filename=item_meta["filename"],
+        size=item_meta["size"],
+        mime_type=item_meta["mime_type"],
+        ext=item_meta["ext"],
         date=event.message.date.isoformat(),
         caption=(event.message.message or "")[:120],
     )
-    if inserted:
-        log.info(f"[{channel['title']}] New media: {item['filename']} ({item['size']} B)")
+    if db_id:
+        log.info(f"[{channel['title']}] New media: {item_meta['filename']} ({item_meta['size']} B) — queuing download")
+        asyncio.create_task(download_item(
+            client, db,
+            {
+                "id": db_id,
+                "channel_identifier": channel["identifier"],
+                "channel_telegram_id": channel["telegram_id"],
+                "channel_title": channel["title"],
+                "message_id": event.message.id,
+                "filename": item_meta["filename"],
+                "size": item_meta["size"],
+            },
+            dest, semaphore, message=event.message,
+        ))
 
 
 def _extract_media(message) -> dict | None:

@@ -56,13 +56,13 @@ Your goal: produce code that is predictable, debuggable, and easy for future LLM
 
 ## Project: tg-downloader
 
-CLI tool that scans Telegram channels for media files and lets the user interactively select which ones to download.
+CLI tool that auto-downloads media from Telegram channels as messages arrive, with configurable retention cleanup and an interactive discard tool.
 
 ### Stack
 - **Python 3.11**, managed by **uv** (`pyproject.toml` + `uv.lock`)
 - **Telethon** — MTProto Telegram client (user account, not bot)
 - **InquirerPy** — interactive checkbox file selection in the terminal
-- **rich** — tables, progress bars, styled output
+- **rich** — tables, styled output
 - **PyYAML** — config file
 
 ### Entry points
@@ -71,18 +71,18 @@ uv run tgdctl <command>        # host-side management (Docker + DB stats)
 uv run tg-downloader <command> # app CLI (runs inside the container/venv)
 uv run python main.py <command>
 
-# app subcommands: listen | subscribe | unsubscribe | channels | download | status | history | scrape
+# app subcommands: listen | subscribe | unsubscribe | channels | discard | status | history | scrape
 ```
 
 ### File layout
 | File | Responsibility |
 |---|---|
-| `main.py` | Entry point; CLI subcommands (`listen`, `subscribe`, `unsubscribe`, `channels`, `download`, `status`, `history`, `scrape`) |
+| `main.py` | Entry point; CLI subcommands (`listen`, `subscribe`, `unsubscribe`, `channels`, `discard`, `status`, `history`, `scrape`) |
 | `config.py` | Load and validate `config.yaml` |
 | `db.py` | SQLite schema and all query methods (`Database` class) |
-| `listener.py` | Telethon event handler; records incoming media to DB |
-| `ui.py` | Interactive checkbox file selection (InquirerPy) |
-| `downloader.py` | Download selected files with rich progress bars |
+| `listener.py` | Real-time listener; auto-downloads on arrival; startup backfill + flush pending; hourly retention cleanup |
+| `ui.py` | Interactive `select_discard` checkbox UI (InquirerPy) |
+| `downloader.py` | `download_item` — single-file daemon-mode download via Telethon |
 | `utils.py` | Pure helpers: `human_size`, `unique_path` |
 | `tgdctl.py` | Host-side management CLI; wraps docker compose + proxies app commands |
 | `config.yaml.example` | Template config — copy to `config.yaml` to start |
@@ -103,11 +103,12 @@ uv run tgdctl start                  # build + start the listener container
 uv run tgdctl stop / restart / logs  # service control
 uv run tgdctl auth                   # first-time Telegram auth (interactive)
 uv run tgdctl status                 # container state + per-channel DB stats
+uv run tgdctl progress               # overall progress bar + recently downloaded files
+uv run tgdctl progress -w            # same, live-updating every 2 seconds (Ctrl+C to exit)
 
 uv run tgdctl subscribe @channel     # subscribe to a channel
 uv run tgdctl channels               # list subscribed channels
-uv run tgdctl download               # select and download pending media
-uv run tgdctl skip                   # mark pending media as skipped
+uv run tgdctl discard                # review downloaded files and delete unwanted ones (no listener restart needed)
 uv run tgdctl history [--limit N]    # show recently downloaded files
 uv run tgdctl unsubscribe @channel   # unsubscribe from a channel
 ```
@@ -126,10 +127,26 @@ Downloaded files appear in `./data/downloads/` on the host.
 ### Session file
 Telethon writes a `tg_session.session` file after the first login. Subsequent runs reuse it without re-authenticating. Do not commit it.
 
-### Download concurrency
-`downloader.py` downloads up to `CONCURRENT_DOWNLOADS = 3` files in parallel using `asyncio.Semaphore` + `asyncio.gather`. Raise the constant to saturate faster connections; keep it low (1–3) to avoid Telegram FloodWait errors.
+### Download flow
+On each `listen` startup the listener:
+1. **Flushes pending** — downloads any DB records that are still `pending` (e.g. from a prior `scrape` or a crashed session).
+2. **Backfills gaps** — for each channel, finds the highest recorded `message_id` and fetches everything newer from Telegram, then downloads it. Only runs if at least one message was previously recorded for that channel (no reference point = skip; use `scrape` for initial history).
+3. **Real-time** — downloads new messages immediately as they arrive via `asyncio.create_task`.
+4. **Retention cleanup** — runs once on startup then every hour; deletes files older than `download.retention_days` days (set to 0 to disable).
+
+`downloader.py` limits concurrency to `CONCURRENT_DOWNLOADS = 3` via `asyncio.Semaphore`. Raise to saturate faster connections; keep low (1–3) to avoid Telegram FloodWait errors.
+
+### Media statuses in DB
+| Status | Meaning |
+|---|---|
+| `pending` | Recorded but not yet downloaded (should be 0 after startup flush) |
+| `downloaded` | File is on disk |
+| `discarded` | User deleted via `discard` command |
+| `expired` | Auto-deleted by retention cleanup |
+| `skipped` | Legacy — dismissed without downloading in the old manual workflow |
 
 ### Known constraints
 - Can only watch channels the authenticated user is a member of.
-- The listener only sees messages that arrive while it is running — there is no backfill of history on subscribe.
+- Backfill only covers the gap since the last recorded message — it does not fetch all history. Use `scrape` for a full initial history pull.
 - Photos from Telegram are always downloaded as JPEGs regardless of original format.
+- Files without a `downloaded_at` timestamp (downloaded before this field was added) are not subject to automatic retention cleanup.

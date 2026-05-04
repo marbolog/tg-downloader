@@ -21,9 +21,6 @@ PROJECT_DIR = Path(__file__).parent
 DB_PATH = PROJECT_DIR / "data" / "tg_downloader.db"
 SERVICE = "tg-downloader"
 
-# Commands that need a TTY (interactive prompts)
-INTERACTIVE = {"download", "auth"}
-
 
 def compose(*args) -> int:
     return subprocess.call(["sudo", "docker", "compose", *args], cwd=PROJECT_DIR)
@@ -70,7 +67,7 @@ def run_with_restart(*app_args: str, interactive: bool = False) -> int:
     """Stop the listener, run an app command in a fresh container, restart.
 
     Needed for commands that open a Telethon client: two clients cannot share
-    the same SQLite session file simultaneously.
+    the same session simultaneously.
     """
     print("Stopping listener to free Telegram session...")
     compose("stop", SERVICE)
@@ -99,11 +96,88 @@ def cmd_status() -> None:
         return
 
     try:
-        from rich.console import Console
-        from rich.table import Table
+        from rich.console import Console  # noqa: F401
         _rich_status_table(rows)
     except ImportError:
         _plain_status_table(rows)
+
+
+def cmd_progress(watch: bool) -> None:
+    if not DB_PATH.exists():
+        print("No database found — run 'tgdctl start' first.")
+        return
+
+    from rich.console import Console
+    from rich.live import Live
+    from rich.table import Table
+    from rich.progress import BarColumn, Progress, TextColumn, MofNCompleteColumn
+    from rich.columns import Columns
+    import time
+
+    console = Console()
+
+    def _build_display():
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            counts = dict(conn.execute("""
+                SELECT
+                    SUM(CASE WHEN status='pending'    THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN status='downloaded' THEN 1 ELSE 0 END) AS downloaded,
+                    COUNT(*) AS total
+                FROM media_messages
+            """).fetchone())
+
+            recent = [dict(r) for r in conn.execute("""
+                SELECT m.filename, m.size, m.downloaded_at, c.title AS channel_title
+                FROM media_messages m
+                JOIN channels c ON m.channel_id = c.id
+                WHERE m.status = 'downloaded' AND m.downloaded_at IS NOT NULL
+                ORDER BY m.downloaded_at DESC
+                LIMIT 12
+            """).fetchall()]
+        finally:
+            conn.close()
+
+        pending = counts["pending"] or 0
+        downloaded = counts["downloaded"] or 0
+        total = counts["total"] or 0
+
+        # Progress bar
+        prog = Progress(
+            TextColumn("[bold]{task.description}"),
+            BarColumn(bar_width=40),
+            MofNCompleteColumn(),
+            TextColumn("[yellow]{task.fields[pending]} pending"),
+        )
+        prog.add_task("Downloaded", completed=downloaded, total=total, pending=pending)
+
+        # Recent downloads table
+        table = Table(title="Recently Downloaded", box=None, padding=(0, 1))
+        table.add_column("Time", style="dim", width=16)
+        table.add_column("Channel", width=22)
+        table.add_column("File")
+
+        for r in recent:
+            ts = (r.get("downloaded_at") or "")[:16]
+            ch = (r.get("channel_title") or "")[:22]
+            fn = (r.get("filename") or "")[:55]
+            table.add_row(ts, ch, fn)
+
+        from rich.panel import Panel
+        from rich.console import Group
+        return Group(Panel(prog, expand=False), table)
+
+    if watch:
+        with Live(console=console, refresh_per_second=2, screen=False) as live:
+            try:
+                while True:
+                    live.update(_build_display())
+                    time.sleep(2)
+            except KeyboardInterrupt:
+                pass
+    else:
+        console.print(_build_display())
 
 
 def _db_status_rows() -> list[dict]:
@@ -112,8 +186,10 @@ def _db_status_rows() -> list[dict]:
     try:
         return [dict(r) for r in conn.execute("""
             SELECT c.title,
-                   SUM(CASE WHEN m.status='pending'    THEN 1 ELSE 0 END) AS pending,
                    SUM(CASE WHEN m.status='downloaded' THEN 1 ELSE 0 END) AS downloaded,
+                   SUM(CASE WHEN m.status='pending'    THEN 1 ELSE 0 END) AS pending,
+                   SUM(CASE WHEN m.status='discarded'  THEN 1 ELSE 0 END) AS discarded,
+                   SUM(CASE WHEN m.status='expired'    THEN 1 ELSE 0 END) AS expired,
                    SUM(CASE WHEN m.status='skipped'    THEN 1 ELSE 0 END) AS skipped,
                    COUNT(m.id) AS total
             FROM channels c
@@ -132,19 +208,22 @@ def _rich_status_table(rows: list[dict]) -> None:
     console = Console()
     table = Table(title="Download Status")
     table.add_column("Channel")
+    table.add_column("On Disk", justify="right", style="green")
     table.add_column("Pending", justify="right", style="yellow")
-    table.add_column("Downloaded", justify="right", style="green")
-    table.add_column("Skipped", justify="right", style="dim")
+    table.add_column("Removed", justify="right", style="dim")
     table.add_column("Total", justify="right")
 
     totals = [0, 0, 0, 0]
     for r in rows:
-        p, d, s, t = r["pending"] or 0, r["downloaded"] or 0, r["skipped"] or 0, r["total"] or 0
-        totals[0] += p
-        totals[1] += d
-        totals[2] += s
+        d = r["downloaded"] or 0
+        p = r["pending"] or 0
+        removed = (r["discarded"] or 0) + (r["expired"] or 0) + (r["skipped"] or 0)
+        t = r["total"] or 0
+        totals[0] += d
+        totals[1] += p
+        totals[2] += removed
         totals[3] += t
-        table.add_row(r["title"], str(p), str(d), str(s), str(t))
+        table.add_row(r["title"], str(d), str(p), str(removed), str(t))
 
     table.add_section()
     table.add_row("[bold]Total[/bold]", *[f"[bold]{t}[/bold]" for t in totals])
@@ -152,18 +231,21 @@ def _rich_status_table(rows: list[dict]) -> None:
 
 
 def _plain_status_table(rows: list[dict]) -> None:
-    print(f"\n{'Channel':<30} {'Pending':>8} {'Downloaded':>10} {'Skipped':>8} {'Total':>6}")
+    print(f"\n{'Channel':<30} {'On Disk':>8} {'Pending':>8} {'Removed':>8} {'Total':>6}")
     print("-" * 66)
     totals = [0, 0, 0, 0]
     for r in rows:
-        p, d, s, t = r["pending"] or 0, r["downloaded"] or 0, r["skipped"] or 0, r["total"] or 0
-        totals[0] += p
-        totals[1] += d
-        totals[2] += s
+        d = r["downloaded"] or 0
+        p = r["pending"] or 0
+        removed = (r["discarded"] or 0) + (r["expired"] or 0) + (r["skipped"] or 0)
+        t = r["total"] or 0
+        totals[0] += d
+        totals[1] += p
+        totals[2] += removed
         totals[3] += t
-        print(f"{r['title']:<30} {p:>8} {d:>10} {s:>8} {t:>6}")
+        print(f"{r['title']:<30} {d:>8} {p:>8} {removed:>8} {t:>6}")
     print("-" * 66)
-    print(f"{'Total':<30} {totals[0]:>8} {totals[1]:>10} {totals[2]:>8} {totals[3]:>6}")
+    print(f"{'Total':<30} {totals[0]:>8} {totals[1]:>8} {totals[2]:>8} {totals[3]:>6}")
 
 
 def main() -> None:
@@ -179,14 +261,15 @@ service commands:
   logs       Tail container logs  (-n to print and exit)
   auth       First-time Telegram authentication (interactive)
   status     Container state + per-channel DB stats
+  progress   Live download progress + recent files  (-w to watch)
 
 app commands (proxied into the running container):
-  subscribe  @channel    Subscribe to a channel (pauses listener briefly)
-  unsubscribe @channel   Unsubscribe from a channel
-  channels               List subscribed channels
-  download               Select items to download or skip (pauses listener briefly)
-  history                Show recently downloaded files
-  scrape [--channel X] [--limit N]  Backfill media from channel history (pauses listener briefly)
+  subscribe   @channel    Subscribe to a channel (pauses listener briefly)
+  unsubscribe @channel    Unsubscribe from a channel
+  channels                List subscribed channels
+  discard                 Review downloaded files and delete unwanted ones
+  history                 Show recently downloaded files
+  scrape [--channel X] [--limit N] [--since DATE]  Backfill media from history (pauses listener briefly)
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -198,13 +281,15 @@ app commands (proxied into the running container):
     p.add_argument("-n", "--no-follow", action="store_true", help="Print and exit")
     sub.add_parser("auth")
     sub.add_parser("status")
+    p = sub.add_parser("progress")
+    p.add_argument("-w", "--watch", action="store_true", help="Refresh every 2 seconds")
 
     p = sub.add_parser("subscribe")
     p.add_argument("channel")
     p = sub.add_parser("unsubscribe")
     p.add_argument("channel")
     sub.add_parser("channels")
-    sub.add_parser("download")
+    sub.add_parser("discard")
     p = sub.add_parser("history")
     p.add_argument("--limit", type=int, default=20, metavar="N")
 
@@ -217,6 +302,8 @@ app commands (proxied into the running container):
 
     if args.command == "start":
         sys.exit(cmd_start())
+    elif args.command == "progress":
+        cmd_progress(watch=args.watch)
     elif args.command == "stop":
         sys.exit(cmd_stop())
     elif args.command == "restart":
@@ -233,8 +320,9 @@ app commands (proxied into the running container):
         sys.exit(app("unsubscribe", args.channel))
     elif args.command == "channels":
         sys.exit(app("channels"))
-    elif args.command == "download":
-        sys.exit(run_with_restart("download", interactive=True))
+    elif args.command == "discard":
+        # No listener restart needed — discard only manages local files and DB.
+        sys.exit(app("discard", interactive=True))
     elif args.command == "history":
         sys.exit(app("history", "--limit", str(args.limit)))
     elif args.command == "scrape":

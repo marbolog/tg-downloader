@@ -13,49 +13,33 @@ _KEYBINDINGS = {
 }
 
 
-async def select_download_and_skip(pending: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Two-pass selection: first pick items to download, then pick items to skip.
+async def select_discard(downloaded: list[dict]) -> list[dict]:
+    """Show downloaded files and let the user select which ones to DELETE from disk.
 
-    Returns (to_download, to_skip). Items in neither list stay pending.
+    Returns the list of items the user chose to delete. Unselected items are kept.
     """
-    if not pending:
-        console.print("[yellow]No pending media.[/yellow]")
-        return [], []
+    if not downloaded:
+        console.print("[yellow]No downloaded files.[/yellow]")
+        return []
 
-    # Pass 1: download
-    total = len(pending)
-    console.print(f"[bold]Step 1/2 — select items to download[/bold]  ({total} pending)")
+    total = len(downloaded)
+    console.print(f"[bold]Select files to DELETE from disk[/bold]  ({total} on disk)")
+    console.print("[red]Selected files will be permanently removed.[/red]")
     console.print(KEYS_HINT)
-    to_download = await CheckboxPrompt(
-        message="Download:",
-        choices=[Choice(value=item, name=_format_choice(item, i + 1, total)) for i, item in enumerate(pending)],
+
+    to_delete = await CheckboxPrompt(
+        message="Delete:",
+        choices=[Choice(value=item, name=_format_choice(item, i + 1, total)) for i, item in enumerate(downloaded)],
         cycle=True,
-        transformer=lambda r: f"{len(r)} file(s)",
+        transformer=lambda r: f"{len(r)} file(s) to delete",
         keybindings=_KEYBINDINGS,
     ).execute_async()
 
-    # Pass 2: skip (only items not selected for download)
-    download_ids = {item["id"] for item in to_download}
-    remaining = [item for item in pending if item["id"] not in download_ids]
-
-    to_skip = []
-    if remaining:
-        total_r = len(remaining)
-        console.print(f"\n[bold]Step 2/2 — select items to skip[/bold]  ({total_r} remaining)")
-        console.print(KEYS_HINT)
-        to_skip = await CheckboxPrompt(
-            message="Skip (permanently dismiss):",
-            choices=[Choice(value=item, name=_format_choice(item, i + 1, total_r)) for i, item in enumerate(remaining)],
-            cycle=True,
-            transformer=lambda r: f"{len(r)} file(s)",
-            keybindings=_KEYBINDINGS,
-        ).execute_async()
-
-    return to_download, to_skip
+    return to_delete
 
 
 def _format_choice(item: dict, idx: int, total: int) -> str:
-    date_str = (item.get("date") or "")[:10]
+    date_str = (item.get("downloaded_at") or item.get("date") or "")[:10]
     size_str = human_size(item.get("size") or 0)
     ext = item.get("ext") or ""
     ext_str = f".{ext}" if ext else ""

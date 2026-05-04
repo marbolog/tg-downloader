@@ -17,20 +17,26 @@ CREATE TABLE IF NOT EXISTS channels (
 );
 
 CREATE TABLE IF NOT EXISTS media_messages (
-    id           INTEGER PRIMARY KEY,
-    channel_id   INTEGER NOT NULL REFERENCES channels(id),
-    message_id   INTEGER NOT NULL,
-    filename     TEXT NOT NULL,
-    size         INTEGER NOT NULL DEFAULT 0,
-    mime_type    TEXT,
-    ext          TEXT,
-    date         TEXT,
-    caption      TEXT DEFAULT '',
-    status       TEXT NOT NULL DEFAULT 'pending',
-    local_path   TEXT,
+    id            INTEGER PRIMARY KEY,
+    channel_id    INTEGER NOT NULL REFERENCES channels(id),
+    message_id    INTEGER NOT NULL,
+    filename      TEXT NOT NULL,
+    size          INTEGER NOT NULL DEFAULT 0,
+    mime_type     TEXT,
+    ext           TEXT,
+    date          TEXT,
+    caption       TEXT DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    local_path    TEXT,
+    downloaded_at TEXT,
     UNIQUE(channel_id, message_id)
 );
 """
+
+# Each entry is tried once; OperationalError from a duplicate column is silently swallowed.
+_MIGRATIONS = [
+    "ALTER TABLE media_messages ADD COLUMN downloaded_at TEXT",
+]
 
 
 class Database:
@@ -39,6 +45,7 @@ class Database:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            _apply_migrations(conn)
         log.info(f"Database ready: {path}")
 
     @contextmanager
@@ -103,19 +110,19 @@ class Database:
         ext: str,
         date: str,
         caption: str,
-    ) -> bool:
-        """Insert a new media message. Returns True if inserted, False if already present."""
+    ) -> int | None:
+        """Insert a new media message. Returns the inserted row id, or None if already present."""
         with self._conn() as conn:
             try:
-                conn.execute(
+                cur = conn.execute(
                     """INSERT INTO media_messages
                        (channel_id, message_id, filename, size, mime_type, ext, date, caption)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (channel_id, message_id, filename, size, mime_type, ext, date, caption),
                 )
-                return True
+                return cur.lastrowid
             except sqlite3.IntegrityError:
-                return False
+                return None
 
     def get_pending_media(self) -> list[dict]:
         with self._conn() as conn:
@@ -130,10 +137,45 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_downloaded_media(self) -> list[dict]:
+        """Returns files currently on disk (status='downloaded'), newest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT m.*, c.title AS channel_title,
+                          c.telegram_id AS channel_telegram_id,
+                          c.identifier AS channel_identifier
+                   FROM media_messages m
+                   JOIN channels c ON m.channel_id = c.id
+                   WHERE m.status = 'downloaded'
+                   ORDER BY m.downloaded_at DESC, m.date DESC"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_max_message_id(self, channel_id: int) -> int | None:
+        """Returns the highest recorded message_id for a channel, or None if none exist."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT MAX(message_id) AS max_id FROM media_messages WHERE channel_id = ?",
+                (channel_id,),
+            ).fetchone()
+            return row["max_id"] if row else None
+
+    def get_expired_files(self, retention_days: int) -> list[dict]:
+        """Returns downloaded files whose downloaded_at is older than retention_days."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM media_messages
+                   WHERE status = 'downloaded'
+                     AND downloaded_at IS NOT NULL
+                     AND downloaded_at < datetime('now', ?)""",
+                (f"-{retention_days} days",),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def mark_downloaded(self, media_id: int, local_path: str) -> None:
         with self._conn() as conn:
             conn.execute(
-                "UPDATE media_messages SET status='downloaded', local_path=? WHERE id=?",
+                "UPDATE media_messages SET status='downloaded', local_path=?, downloaded_at=datetime('now') WHERE id=?",
                 (local_path, media_id),
             )
 
@@ -143,13 +185,29 @@ class Database:
                 "UPDATE media_messages SET status='skipped' WHERE id=?", (media_id,)
             )
 
+    def mark_discarded(self, media_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE media_messages SET status='discarded', local_path=NULL WHERE id=?",
+                (media_id,),
+            )
+
+    def mark_expired(self, media_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE media_messages SET status='expired', local_path=NULL WHERE id=?",
+                (media_id,),
+            )
+
     def get_status_counts(self) -> list[dict]:
-        """Returns per-channel counts of pending/downloaded/skipped/total media."""
+        """Returns per-channel counts of each status and total."""
         with self._conn() as conn:
             rows = conn.execute("""
                 SELECT c.title, c.identifier,
                        SUM(CASE WHEN m.status='pending'    THEN 1 ELSE 0 END) AS pending,
                        SUM(CASE WHEN m.status='downloaded' THEN 1 ELSE 0 END) AS downloaded,
+                       SUM(CASE WHEN m.status='discarded'  THEN 1 ELSE 0 END) AS discarded,
+                       SUM(CASE WHEN m.status='expired'    THEN 1 ELSE 0 END) AS expired,
                        SUM(CASE WHEN m.status='skipped'    THEN 1 ELSE 0 END) AS skipped,
                        COUNT(m.id) AS total
                 FROM channels c
@@ -167,7 +225,15 @@ class Database:
                 FROM media_messages m
                 JOIN channels c ON m.channel_id = c.id
                 WHERE m.status = 'downloaded'
-                ORDER BY m.rowid DESC
+                ORDER BY m.downloaded_at DESC NULLS LAST, m.rowid DESC
                 LIMIT ?
             """, (limit,)).fetchall()
             return [dict(r) for r in rows]
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    for migration in _MIGRATIONS:
+        try:
+            conn.execute(migration)
+        except sqlite3.OperationalError:
+            pass  # Column already exists — migration already applied

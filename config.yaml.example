@@ -10,6 +10,7 @@ telegram:
 
 download:
   destination: "data/downloads"   # where downloaded files are saved
+  retention_days: 30              # delete files from disk after this many days (0 = never)
 
 # Optional: only track media with these extensions. Empty = track everything.
 filters:
