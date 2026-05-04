@@ -29,6 +29,21 @@ async def download_files(
     dest.mkdir(parents=True, exist_ok=True)
     failed = []
 
+    # Resolve each unique channel once by its stored identifier (@username / URL).
+    # Using the identifier avoids needing the entity cache (access hash), which is
+    # not preserved in StringSession across restarts.
+    channel_entities: dict[int, object] = {}
+    for item in selected_items:
+        cid = item["channel_telegram_id"]
+        if cid in channel_entities:
+            continue
+        identifier = item.get("channel_identifier") or cid
+        try:
+            channel_entities[cid] = await client.get_entity(identifier)
+        except Exception as exc:
+            log.warning(f"Cannot resolve channel {identifier!r}: {exc}")
+            channel_entities[cid] = None
+
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -39,8 +54,13 @@ async def download_files(
         transient=False,
     ) as progress:
         for item in selected_items:
-            filepath = unique_path(dest / item["filename"])
+            entity = channel_entities.get(item["channel_telegram_id"])
+            if entity is None:
+                console.print(f"[red]  Skipping {item['filename']}: channel not resolvable[/red]")
+                failed.append(item)
+                continue
 
+            filepath = unique_path(dest / item["filename"])
             task_id = progress.add_task(
                 f"{(item.get('channel_title') or '')[:20]} / {item['filename'][:40]}",
                 total=item.get("size") or None,
@@ -52,10 +72,7 @@ async def download_files(
                 return cb
 
             try:
-                # Re-fetch the message from Telegram by channel ID + message ID
-                message = await client.get_messages(
-                    item["channel_telegram_id"], ids=item["message_id"]
-                )
+                message = await client.get_messages(entity, ids=item["message_id"])
                 if message is None:
                     raise ValueError("Message not found — it may have been deleted")
 

@@ -120,7 +120,9 @@ class Database:
     def get_pending_media(self) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                """SELECT m.*, c.title AS channel_title, c.telegram_id AS channel_telegram_id
+                """SELECT m.*, c.title AS channel_title,
+                          c.telegram_id AS channel_telegram_id,
+                          c.identifier AS channel_identifier
                    FROM media_messages m
                    JOIN channels c ON m.channel_id = c.id
                    WHERE m.status = 'pending'
