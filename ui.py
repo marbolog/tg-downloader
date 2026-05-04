@@ -1,5 +1,6 @@
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
+from InquirerPy.prompts.checkbox import CheckboxPrompt
 from rich.console import Console
 
 from utils import human_size
@@ -7,6 +8,24 @@ from utils import human_size
 console = Console()
 
 KEYS_HINT = "[dim]Space[/dim]=toggle  [dim]A[/dim]=all  [dim]↑↓[/dim]=navigate  [dim]Enter[/dim]=confirm\n"
+
+
+def _checkbox(message: str, choices: list, **kwargs) -> CheckboxPrompt:
+    """CheckboxPrompt that appends a live n/total position indicator."""
+    total = len(choices)
+
+    class _PC(CheckboxPrompt):
+        def _get_prompt_message(self) -> list:
+            msg = super()._get_prompt_message()
+            if not self.status["answered"]:
+                try:
+                    idx = self.content_control.selected_choice_index
+                    msg.append(("class:instruction", f" [{idx + 1}/{total}]"))
+                except Exception:
+                    pass
+            return msg
+
+    return _PC(message=message, choices=choices, **kwargs)
 
 
 async def select_download_and_skip(pending: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -21,7 +40,7 @@ async def select_download_and_skip(pending: list[dict]) -> tuple[list[dict], lis
     # Pass 1: download
     console.print(f"[bold]Step 1/2 — select items to download[/bold]  ({len(pending)} pending)")
     console.print(KEYS_HINT)
-    to_download = await inquirer.checkbox(
+    to_download = await _checkbox(
         message="Download:",
         choices=[Choice(value=item, name=_format_choice(item)) for item in pending],
         cycle=True,
@@ -36,7 +55,7 @@ async def select_download_and_skip(pending: list[dict]) -> tuple[list[dict], lis
     if remaining:
         console.print(f"\n[bold]Step 2/2 — select items to skip[/bold]  ({len(remaining)} remaining)")
         console.print(KEYS_HINT)
-        to_skip = await inquirer.checkbox(
+        to_skip = await _checkbox(
             message="Skip (permanently dismiss):",
             choices=[Choice(value=item, name=_format_choice(item)) for item in remaining],
             cycle=True,
