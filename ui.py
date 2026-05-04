@@ -6,25 +6,44 @@ from utils import human_size
 
 console = Console()
 
+KEYS_HINT = "[dim]Space[/dim]=toggle  [dim]A[/dim]=all  [dim]↑↓[/dim]=navigate  [dim]Enter[/dim]=confirm\n"
 
-async def select_pending_media(pending: list[dict], action: str = "download") -> list[dict]:
+
+async def select_download_and_skip(pending: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Two-pass selection: first pick items to download, then pick items to skip.
+
+    Returns (to_download, to_skip). Items in neither list stay pending.
+    """
     if not pending:
         console.print("[yellow]No pending media.[/yellow]")
-        return []
+        return [], []
 
-    choices = [Choice(value=item, name=_format_choice(item)) for item in pending]
-
-    console.print(
-        "[dim]Space[/dim]=toggle  [dim]A[/dim]=select all  "
-        "[dim]↑↓[/dim]=navigate  [dim]Enter[/dim]=confirm\n"
-    )
-
-    return await inquirer.checkbox(
-        message=f"Select media to {action} ({len(pending)} pending):",
-        choices=choices,
+    # Pass 1: download
+    console.print(f"[bold]Step 1/2 — select items to download[/bold]  ({len(pending)} pending)")
+    console.print(KEYS_HINT)
+    to_download = await inquirer.checkbox(
+        message="Download:",
+        choices=[Choice(value=item, name=_format_choice(item)) for item in pending],
         cycle=True,
-        transformer=lambda result: f"{len(result)} file(s) selected",
+        transformer=lambda r: f"{len(r)} file(s)",
     ).execute_async()
+
+    # Pass 2: skip (only items not selected for download)
+    download_ids = {item["id"] for item in to_download}
+    remaining = [item for item in pending if item["id"] not in download_ids]
+
+    to_skip = []
+    if remaining:
+        console.print(f"\n[bold]Step 2/2 — select items to skip[/bold]  ({len(remaining)} remaining)")
+        console.print(KEYS_HINT)
+        to_skip = await inquirer.checkbox(
+            message="Skip (permanently dismiss):",
+            choices=[Choice(value=item, name=_format_choice(item)) for item in remaining],
+            cycle=True,
+            transformer=lambda r: f"{len(r)} file(s)",
+        ).execute_async()
+
+    return to_download, to_skip
 
 
 def _format_choice(item: dict) -> str:

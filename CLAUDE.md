@@ -71,13 +71,13 @@ uv run tgdctl <command>        # host-side management (Docker + DB stats)
 uv run tg-downloader <command> # app CLI (runs inside the container/venv)
 uv run python main.py <command>
 
-# app subcommands: listen | subscribe | unsubscribe | channels | download | status | skip | history | scrape
+# app subcommands: listen | subscribe | unsubscribe | channels | download | status | history | scrape
 ```
 
 ### File layout
 | File | Responsibility |
 |---|---|
-| `main.py` | Entry point; CLI subcommands (`listen`, `subscribe`, `unsubscribe`, `channels`, `download`, `status`, `skip`, `history`, `scrape`) |
+| `main.py` | Entry point; CLI subcommands (`listen`, `subscribe`, `unsubscribe`, `channels`, `download`, `status`, `history`, `scrape`) |
 | `config.py` | Load and validate `config.yaml` |
 | `db.py` | SQLite schema and all query methods (`Database` class) |
 | `listener.py` | Telethon event handler; records incoming media to DB |

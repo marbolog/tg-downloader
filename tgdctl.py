@@ -22,7 +22,7 @@ DB_PATH = PROJECT_DIR / "data" / "tg_downloader.db"
 SERVICE = "tg-downloader"
 
 # Commands that need a TTY (interactive prompts)
-INTERACTIVE = {"download", "skip", "auth"}
+INTERACTIVE = {"download", "auth"}
 
 
 def compose(*args) -> int:
@@ -184,8 +184,7 @@ app commands (proxied into the running container):
   subscribe  @channel    Subscribe to a channel (pauses listener briefly)
   unsubscribe @channel   Unsubscribe from a channel
   channels               List subscribed channels
-  download               Select and download pending media (pauses listener briefly)
-  skip                   Mark pending media as skipped
+  download               Select items to download or skip (pauses listener briefly)
   history                Show recently downloaded files
   scrape [--channel X] [--limit N]  Backfill media from channel history (pauses listener briefly)
 """,
@@ -206,7 +205,6 @@ app commands (proxied into the running container):
     p.add_argument("channel")
     sub.add_parser("channels")
     sub.add_parser("download")
-    sub.add_parser("skip")
     p = sub.add_parser("history")
     p.add_argument("--limit", type=int, default=20, metavar="N")
 
@@ -237,8 +235,6 @@ app commands (proxied into the running container):
         sys.exit(app("channels"))
     elif args.command == "download":
         sys.exit(run_with_restart("download", interactive=True))
-    elif args.command == "skip":
-        sys.exit(app("skip", interactive=True))
     elif args.command == "history":
         sys.exit(app("history", "--limit", str(args.limit)))
     elif args.command == "scrape":

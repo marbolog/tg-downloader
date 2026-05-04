@@ -36,11 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("channels", help="List subscribed channels and pending counts")
 
-    sub.add_parser("download", help="Choose pending media files to download")
+    sub.add_parser("download", help="Select pending media to download or skip")
 
     sub.add_parser("status", help="Show download stats per channel")
-
-    sub.add_parser("skip", help="Interactively mark pending media as skipped")
 
     p = sub.add_parser("history", help="Show recently downloaded files")
     p.add_argument("--limit", type=int, default=20, metavar="N", help="Number of entries (default: 20)")
@@ -63,9 +61,6 @@ async def run(args) -> None:
         return
     if args.command == "history":
         cmd_history(db, args.limit)
-        return
-    if args.command == "skip":
-        await cmd_skip(db)
         return
     if args.command == "channels":
         cmd_channels(db)
@@ -94,13 +89,17 @@ async def run(args) -> None:
             cmd_channels(db)
 
         elif args.command == "download":
-            from ui import select_pending_media
+            from ui import select_download_and_skip
             from downloader import download_files
             pending = db.get_pending_media()
-            selected = await select_pending_media(pending)
-            if selected:
-                await download_files(client, db, selected, config["download"]["destination"])
-            else:
+            to_download, to_skip = await select_download_and_skip(pending)
+            for item in to_skip:
+                db.mark_skipped(item["id"])
+            if to_skip:
+                console.print(f"[dim]Skipped {len(to_skip)} item(s).[/dim]")
+            if to_download:
+                await download_files(client, db, to_download, config["download"]["destination"])
+            elif not to_skip:
                 console.print("[yellow]Nothing selected.[/yellow]")
 
         elif args.command == "scrape":
@@ -257,16 +256,6 @@ async def cmd_scrape(client: TelegramClient, db: Database, config: dict, identif
         total_new += count
 
     console.print(f"\n[green]Done — {total_new} new item(s) added to pending queue.[/green]")
-
-
-async def cmd_skip(db: Database) -> None:
-    from ui import select_pending_media
-    pending = db.get_pending_media()
-    selected = await select_pending_media(pending, action="skip")
-    for item in selected:
-        db.mark_skipped(item["id"])
-    if selected:
-        console.print(f"[green]Skipped {len(selected)} item(s).[/green]")
 
 
 def main() -> None:
