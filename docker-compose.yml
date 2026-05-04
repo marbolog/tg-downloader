@@ -6,5 +6,6 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data
+      - /srv/share/tg-downloads:/srv/share/tg-downloads
     stdin_open: true
     tty: true
