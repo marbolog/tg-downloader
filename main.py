@@ -22,8 +22,8 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     handlers=[RichHandler(console=console, show_path=False)],
 )
-# Telethon is very chatty at INFO; its reconnection noise isn't useful to the user.
-logging.getLogger("telethon").setLevel(logging.WARNING)
+# Telethon logs reconnection noise (idle TCP teardowns) at WARNING; suppress to ERROR.
+logging.getLogger("telethon").setLevel(logging.ERROR)
 log = logging.getLogger(__name__)
 
 DB_PATH = "data/tg_downloader.db"
