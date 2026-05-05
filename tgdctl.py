@@ -123,8 +123,7 @@ def cmd_progress(watch: bool) -> None:
             counts = dict(conn.execute("""
                 SELECT
                     SUM(CASE WHEN status='pending'    THEN 1 ELSE 0 END) AS pending,
-                    SUM(CASE WHEN status='downloaded' THEN 1 ELSE 0 END) AS downloaded,
-                    COUNT(*) AS total
+                    SUM(CASE WHEN status='downloaded' THEN 1 ELSE 0 END) AS downloaded
                 FROM media_messages
             """).fetchone())
 
@@ -141,7 +140,7 @@ def cmd_progress(watch: bool) -> None:
 
         pending = counts["pending"] or 0
         downloaded = counts["downloaded"] or 0
-        total = counts["total"] or 0
+        total = downloaded + pending
 
         # Progress bar
         prog = Progress(
