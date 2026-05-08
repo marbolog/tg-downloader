@@ -5,7 +5,7 @@ from pathlib import Path
 from telethon import TelegramClient
 
 from db import Database
-from lang_filter import should_discard
+from lang_filter import DISCARD_LANG, detect_language
 from utils import human_size, unique_path
 
 log = logging.getLogger(__name__)
@@ -42,15 +42,17 @@ async def download_item(
 
             await client.download_media(message, file=str(filepath))
 
-            if should_discard(filepath, item.get("ext") or ""):
+            lang = detect_language(filepath, item.get("ext") or "")
+            if lang == DISCARD_LANG:
                 filepath.unlink(missing_ok=True)
                 db.mark_discarded(item["id"])
                 log.info(f"[{label}] Auto-discarded (German): {item['filename']}")
                 return True
 
-            db.mark_downloaded(item["id"], str(filepath))
+            db.mark_downloaded(item["id"], str(filepath), language=lang)
             size_str = human_size(filepath.stat().st_size) if filepath.exists() else "?"
-            log.info(f"[{label}] Downloaded: {item['filename']}  ({size_str})")
+            lang_tag = f" [{lang}]" if lang else ""
+            log.info(f"[{label}] Downloaded: {item['filename']}  ({size_str}){lang_tag}")
             return True
         except Exception as exc:
             log.error(f"[{label}] Failed to download {item['filename']!r}: {exc}")

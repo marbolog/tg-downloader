@@ -24,8 +24,26 @@ def _db():
     return conn
 
 
+@app.get("/api/languages")
+def list_languages():
+    conn = _db()
+    try:
+        rows = conn.execute("""
+            SELECT COALESCE(m.language, '__unknown__') AS language, COUNT(*) AS count
+            FROM media_messages m
+            JOIN channels c ON m.channel_id = c.id
+            WHERE m.status = 'downloaded'
+            GROUP BY m.language
+            HAVING count > 0
+            ORDER BY count DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 @app.get("/api/files")
-def list_files(page: int = 1, per_page: int = 60, channel: str = ""):
+def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: str = ""):
     offset = (page - 1) * per_page
     conn = _db()
     try:
@@ -34,6 +52,11 @@ def list_files(page: int = 1, per_page: int = 60, channel: str = ""):
         if channel:
             where += " AND c.identifier = ?"
             params.append(channel)
+        if language == "__unknown__":
+            where += " AND m.language IS NULL"
+        elif language:
+            where += " AND m.language = ?"
+            params.append(language)
 
         total = conn.execute(
             f"SELECT COUNT(*) FROM media_messages m JOIN channels c ON m.channel_id = c.id WHERE {where}",

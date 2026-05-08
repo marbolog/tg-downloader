@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS media_messages (
     status        TEXT NOT NULL DEFAULT 'pending',
     local_path    TEXT,
     downloaded_at TEXT,
+    language      TEXT,
     UNIQUE(channel_id, message_id)
 );
 """
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS media_messages (
 # Each entry is tried once; OperationalError from a duplicate column is silently swallowed.
 _MIGRATIONS = [
     "ALTER TABLE media_messages ADD COLUMN downloaded_at TEXT",
+    "ALTER TABLE media_messages ADD COLUMN language TEXT",
 ]
 
 
@@ -172,11 +174,11 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def mark_downloaded(self, media_id: int, local_path: str) -> None:
+    def mark_downloaded(self, media_id: int, local_path: str, language: str | None = None) -> None:
         with self._conn() as conn:
             conn.execute(
-                "UPDATE media_messages SET status='downloaded', local_path=?, downloaded_at=datetime('now') WHERE id=?",
-                (local_path, media_id),
+                "UPDATE media_messages SET status='downloaded', local_path=?, downloaded_at=datetime('now'), language=? WHERE id=?",
+                (local_path, language, media_id),
             )
 
     def mark_skipped(self, media_id: int) -> None:

@@ -175,6 +175,20 @@ body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .info-meta { font-size: .66rem; color: var(--muted); }
+
+.lang-badge {
+  display: inline-block; padding: 1px 5px; border-radius: 3px;
+  font-size: .6rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  background: #e2e8f0; color: #475569;
+}
+.lang-badge[data-lang="en"] { background: #dbeafe; color: #1d4ed8; }
+.lang-badge[data-lang="fr"] { background: #ede9fe; color: #6d28d9; }
+.lang-badge[data-lang="es"] { background: #ffedd5; color: #c2410c; }
+.lang-badge[data-lang="it"] { background: #dcfce7; color: #15803d; }
+.lang-badge[data-lang="pt"] { background: #fef9c3; color: #a16207; }
+.lang-badge[data-lang="ru"] { background: #fee2e2; color: #b91c1c; }
+.lang-badge[data-lang="nl"] { background: #fef3c7; color: #d97706; }
+.lang-badge[data-lang="pl"] { background: #fce7f3; color: #be185d; }
 .btn-dl {
   display: block; margin-top: 7px; padding: 7px 5px; text-align: center;
   font-size: .72rem; border: 1px solid var(--border); border-radius: 5px;
@@ -218,7 +232,8 @@ body {
 
 <header class="header">
   <span class="brand">TG Files</span>
-  <select id="ch-filter" title="Filter by channel"></select>
+  <select id="ch-filter" title="Filter by channel" style="flex:1.5"></select>
+  <select id="lang-filter" title="Filter by language" style="flex:1"></select>
   <div class="header-actions">
     <button class="btn" onclick="selectAll()">Select All</button>
     <button class="btn" onclick="clearAll()">Clear</button>
@@ -248,7 +263,19 @@ body {
 
 <script>
 /* ── State ── */
-const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', selected: new Set() };
+const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', language: '', selected: new Set() };
+
+const LANG_NAMES = {
+  af:'Afrikaans', ar:'Arabic', bg:'Bulgarian', ca:'Catalan', cs:'Czech',
+  da:'Danish', de:'Deutsch', el:'Greek', en:'English', es:'Español',
+  et:'Estonian', fa:'Persian', fi:'Finnish', fr:'Français', hr:'Croatian',
+  hu:'Hungarian', id:'Indonesian', it:'Italiano', ja:'Japanese', ko:'Korean',
+  lt:'Lithuanian', lv:'Latvian', mk:'Macedonian', ms:'Malay', nl:'Nederlands',
+  no:'Norwegian', pl:'Polski', pt:'Português', ro:'Romanian', ru:'Русский',
+  sk:'Slovak', sl:'Slovenian', sq:'Albanian', sr:'Serbian', sv:'Swedish',
+  th:'Thai', tl:'Filipino', tr:'Turkish', uk:'Ukrainian', vi:'Vietnamese',
+  zh:'Chinese', '__unknown__':'Unknown',
+};
 
 /* ── Lazy thumbnail observer ── */
 const thumbObs = new IntersectionObserver(entries => {
@@ -264,25 +291,36 @@ const thumbObs = new IntersectionObserver(entries => {
 
 /* ── Boot ── */
 async function init() {
-  const sel = document.getElementById('ch-filter');
-  sel.innerHTML = '<option value="">All channels</option>';
+  const chSel   = document.getElementById('ch-filter');
+  const langSel = document.getElementById('lang-filter');
+
+  // Reset selects (static strings only — not user data)
+  while (chSel.firstChild)   chSel.removeChild(chSel.firstChild);
+  while (langSel.firstChild) langSel.removeChild(langSel.firstChild);
+  const mkOpt = (val, label, sel) => { const o = document.createElement('option'); o.value = val; o.textContent = label; sel.appendChild(o); };
+  mkOpt('', 'All channels',   chSel);
+  mkOpt('', 'All languages', langSel);
+
   try {
-    const channels = await fetch('/api/channels').then(r => r.json());
-    for (const ch of channels) {
-      const o = document.createElement('option');
-      o.value = ch.identifier;
-      o.textContent = `${ch.title} (${ch.count})`;
-      sel.appendChild(o);
-    }
+    const [channels, languages] = await Promise.all([
+      fetch('/api/channels').then(r => r.json()),
+      fetch('/api/languages').then(r => r.json()),
+    ]);
+    for (const ch of channels)
+      mkOpt(ch.identifier, `${ch.title} (${ch.count})`, chSel);
+    for (const l of languages)
+      mkOpt(l.language, `${LANG_NAMES[l.language] || l.language.toUpperCase()} (${l.count})`, langSel);
   } catch { /* non-fatal */ }
-  sel.addEventListener('change', e => { S.channel = e.target.value; S.page = 1; S.selected.clear(); load(); });
+
+  chSel.addEventListener('change',   e => { S.channel  = e.target.value; S.page = 1; S.selected.clear(); load(); });
+  langSel.addEventListener('change', e => { S.language = e.target.value; S.page = 1; S.selected.clear(); load(); });
   await load();
 }
 
 /* ── Data ── */
 async function load() {
   document.getElementById('grid').innerHTML = '<div class="loading-msg"><h2>Loading…</h2></div>';
-  const qs = new URLSearchParams({ page: S.page, per_page: S.perPage, channel: S.channel });
+  const qs = new URLSearchParams({ page: S.page, per_page: S.perPage, channel: S.channel, language: S.language });
   try {
     const d = await fetch(`/api/files?${qs}`).then(r => r.json());
     S.files = d.items; S.total = d.total;
@@ -317,24 +355,36 @@ function makeCard(f) {
   const icon = EXT_ICON[ext] || '📁';
   const size = fmtSize(f.size || 0);
   const date = (f.downloaded_at || f.date || '').slice(0, 10);
+  const lang = f.language || null;
+  const langLabel = lang ? (LANG_NAMES[lang] || lang.toUpperCase()) : null;
 
-  card.innerHTML = `
-    <div class="cover">
-      <div class="cover-placeholder">
-        <span class="icon">${icon}</span>
-        <span class="ext">${ext || 'file'}</span>
-      </div>
-      <img data-id="${f.id}" alt="">
-      <div class="cover-check">✓</div>
-    </div>
-    <div class="info">
-      <div class="info-name" title="${esc(f.filename)}">${esc(f.filename)}</div>
-      <div class="info-channel" title="${esc(f.channel_title)}">${esc(f.channel_title)}</div>
-      <div class="info-meta">${size}${date ? ' · ' + date : ''}</div>
-      <a href="/api/download/${f.id}" class="btn-dl" onclick="event.stopPropagation()" download>⬇ Download</a>
-    </div>`;
+  // Build card using DOM methods to avoid any XSS risk with user-controlled filenames
+  const cover = document.createElement('div'); cover.className = 'cover';
+  const ph = document.createElement('div'); ph.className = 'cover-placeholder';
+  const iconSpan = document.createElement('span'); iconSpan.className = 'icon'; iconSpan.textContent = icon;
+  const extSpan  = document.createElement('span'); extSpan.className  = 'ext';  extSpan.textContent = ext || 'file';
+  ph.appendChild(iconSpan); ph.appendChild(extSpan);
+  const img = document.createElement('img'); img.dataset.id = f.id; img.alt = '';
+  const chk = document.createElement('div'); chk.className = 'cover-check'; chk.textContent = '✓';
+  cover.appendChild(ph); cover.appendChild(img); cover.appendChild(chk);
 
-  thumbObs.observe(card.querySelector('img'));
+  const info = document.createElement('div'); info.className = 'info';
+  const name = document.createElement('div'); name.className = 'info-name'; name.title = f.filename || ''; name.textContent = f.filename || '';
+  const chan = document.createElement('div'); chan.className = 'info-channel'; chan.title = f.channel_title || ''; chan.textContent = f.channel_title || '';
+  const meta = document.createElement('div'); meta.className = 'info-meta'; meta.textContent = size + (date ? ' · ' + date : '');
+  const dl   = document.createElement('a');   dl.className   = 'btn-dl'; dl.href = `/api/download/${f.id}`; dl.textContent = '⬇ Download'; dl.download = ''; dl.addEventListener('click', e => e.stopPropagation());
+  info.appendChild(name); info.appendChild(chan);
+  if (lang) {
+    const badge = document.createElement('span');
+    badge.className = 'lang-badge'; badge.dataset.lang = lang;
+    badge.title = langLabel; badge.textContent = lang.toUpperCase();
+    info.appendChild(badge);
+  }
+  info.appendChild(meta); info.appendChild(dl);
+
+  card.appendChild(cover); card.appendChild(info);
+
+  thumbObs.observe(img);
   card.addEventListener('click', e => { if (!e.target.closest('.btn-dl')) toggleCard(f.id, card); });
   return card;
 }

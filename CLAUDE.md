@@ -134,7 +134,8 @@ Features:
 - Click cards to select; Select All / Clear buttons
 - Delete Selected — permanently removes files from disk and marks `discarded` in DB
 - Per-card Download button — downloads the file to the browser
-- Filter by channel; pagination (60 per page)
+- Filter by channel and by language; pagination (60 per page)
+- Language badge on each card (ISO code chip, color-coded by language)
 - Thumbnails are cached in `data/thumbs/` and generated on first request
 
 ### Container behaviour
@@ -173,6 +174,8 @@ Detection is two-stage:
 Formats with no text extraction support (MOBI, AZW3, CBR, CBZ, DJVU, FB2) are always kept; only the filename heuristic applies if the extension is `pdf` or `epub`.
 
 **Critical**: the item dict passed to `download_item` must include `"ext"`. Both `_backfill_missed` and `_handle` in `listener.py` explicitly set this field; `_flush_pending` gets it from the full DB row automatically.
+
+The detected language is stored in `media_messages.language` (ISO 639-1 code, nullable — `NULL` means undetected or unsupported format). Files that existed before this feature was added have `language = NULL`. New downloads are tagged automatically.
 
 ### Media statuses in DB
 | Status | Meaning |

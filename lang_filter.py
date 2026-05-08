@@ -1,8 +1,13 @@
 """Post-download language detection.
 
-Extracts a text sample from a downloaded file and returns whether it should
-be discarded based on language. Only PDF and EPUB are detectable; all other
-formats return False (keep).
+Extracts a text sample from a downloaded file and returns the detected
+ISO 639-1 language code. Only PDF and EPUB are supported; all other
+formats return None.
+
+Two-stage detection:
+  1. Text extraction + langdetect (confidence >= _CONFIDENCE).
+  2. Filename heuristic — German umlauts or German-specific month names —
+     used only when no text could be extracted (image-based / scanned files).
 """
 
 import logging
@@ -25,56 +30,44 @@ _PDF_PAGES = 4
 _EPUB_CHAPTERS = 3
 _MIN_CHARS = 300
 
-# Filename-based German detection used as fallback when no text can be extracted
-# (e.g. image-only / scanned PDFs).
-_GERMAN_UMLAUTS = frozenset("äöüßÄÖÜ")
+# German-specific month names that differ from English equivalents.
+# April/August/September/November are excluded — identical in English.
 _GERMAN_MONTHS = {
-    "januar", "februar", "märz", "april", "mai", "juni",
-    "juli", "august", "september", "oktober", "november", "dezember",
+    "januar", "februar", "märz", "mai", "juni",
+    "juli", "oktober", "dezember",
 }
+_GERMAN_UMLAUTS = frozenset("äöüßÄÖÜ")
 
 
-def should_discard(file_path: Path, ext: str) -> bool:
-    """Returns True if the file is detected as German.
+def detect_language(file_path: Path, ext: str) -> str | None:
+    """Returns ISO 639-1 language code, or None if undetermined.
 
-    Detection is two-stage:
-    1. Text extraction + langdetect (high confidence threshold).
-    2. Filename heuristic — German umlauts or month names — used only when
-       no text could be extracted (image-based / scanned PDFs).
+    Stage 1: text extraction + langdetect (confidence >= 0.90).
+    Stage 2: filename heuristic (German umlauts / month names) — only when
+    text extraction yields nothing (image-based / scanned PDFs).
+    Formats other than pdf and epub always return None.
     """
-    lang = _detect_lang(file_path, ext)
+    lang = _detect_from_text(file_path, ext)
     if lang is not None:
-        discard = lang == DISCARD_LANG
-        if discard:
-            log.info(f"{file_path.name}: detected language '{lang}' — will discard")
-        else:
-            log.debug(f"{file_path.name}: detected language '{lang}' — keeping")
-        return discard
+        log.debug(f"{file_path.name}: detected '{lang}' via text extraction")
+        return lang
 
     if ext in ("pdf", "epub") and _filename_is_german(file_path.name):
-        log.info(f"{file_path.name}: filename heuristic detected German — will discard")
-        return True
+        log.debug(f"{file_path.name}: detected 'de' via filename heuristic")
+        return "de"
 
-    return False
-
-
-def _filename_is_german(filename: str) -> bool:
-    """Returns True if the filename contains German-specific characters or month names."""
-    if any(c in _GERMAN_UMLAUTS for c in filename):
-        return True
-    words = set(re.findall(r"[A-Za-zäöüÄÖÜß]+", filename.lower()))
-    return bool(words & _GERMAN_MONTHS)
+    return None
 
 
-def _detect_lang(file_path: Path, ext: str) -> str | None:
-    """Returns ISO 639-1 language code or None if undetermined."""
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _detect_from_text(file_path: Path, ext: str) -> str | None:
     try:
         if ext == "pdf":
             text = _pdf_text(file_path)
         elif ext == "epub":
             text = _epub_text(file_path)
         else:
-            log.debug(f"{file_path.name}: language detection not supported for .{ext}")
             return None
 
         if len(text.strip()) < _MIN_CHARS:
@@ -90,11 +83,17 @@ def _detect_lang(file_path: Path, ext: str) -> str | None:
         return top.lang if top.prob >= _CONFIDENCE else None
 
     except LangDetectException:
-        log.debug(f"{file_path.name}: langdetect could not determine language")
         return None
     except Exception as exc:
         log.warning(f"{file_path.name}: language detection error: {exc}")
         return None
+
+
+def _filename_is_german(filename: str) -> bool:
+    if any(c in _GERMAN_UMLAUTS for c in filename):
+        return True
+    words = set(re.findall(r"[A-Za-zäöüÄÖÜß]+", filename.lower()))
+    return bool(words & _GERMAN_MONTHS)
 
 
 def _pdf_text(file_path: Path) -> str:
@@ -105,7 +104,6 @@ def _pdf_text(file_path: Path) -> str:
 
 def _epub_text(file_path: Path) -> str:
     with zipfile.ZipFile(file_path) as zf:
-        # Collect HTML content files, exclude navigation/TOC artifacts.
         html_names = sorted(
             n for n in zf.namelist()
             if n.lower().endswith((".html", ".xhtml", ".htm"))
@@ -123,8 +121,6 @@ def _epub_text(file_path: Path) -> str:
 
 
 class _TextExtractor(HTMLParser):
-    """Strips HTML tags, skipping script and style content."""
-
     def __init__(self):
         super().__init__()
         self._parts: list[str] = []
