@@ -90,6 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=None, metavar="N", help="Max messages to scan per channel (default: unlimited)")
     p.add_argument("--since", metavar="YYYY-MM-DD", default=None, help="Stop at messages older than this date")
 
+    sub.add_parser("scan-languages", help="Retroactively detect language for untagged downloaded files; auto-discard German ones")
+
     return parser
 
 
@@ -109,6 +111,9 @@ async def run(args) -> None:
         return
     if args.command == "unsubscribe":
         cmd_unsubscribe(db, args.channel)
+        return
+    if args.command == "scan-languages":
+        cmd_scan_languages(db)
         return
     if args.command == "discard":
         from ui import select_discard
@@ -250,6 +255,68 @@ def cmd_history(db: Database, limit: int) -> None:
             (r.get("local_path") or "")[:60],
         )
     console.print(table)
+
+
+def cmd_scan_languages(db: Database) -> None:
+    from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+    from lang_filter import DISCARD_LANG, detect_language
+
+    items = db.get_untagged_downloaded()
+    if not items:
+        console.print("[green]All downloaded files already have a language tag.[/green]")
+        return
+
+    console.print(f"[dim]Scanning {len(items)} untagged file(s)…[/dim]")
+
+    counts: dict[str, int] = {}
+    discarded = 0
+    missing = 0
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Detecting languages", total=len(items))
+        for item in items:
+            path = Path(item["local_path"])
+            if not path.exists():
+                missing += 1
+                progress.advance(task)
+                continue
+
+            lang = detect_language(path, (item.get("ext") or "").lower())
+
+            if lang == DISCARD_LANG:
+                path.unlink(missing_ok=True)
+                db.mark_discarded(item["id"])
+                discarded += 1
+                counts["de"] = counts.get("de", 0) + 1
+                log.info(f"Scan-discarded (German): {item['filename']}")
+            else:
+                db.set_language(item["id"], lang)
+                key = lang or "__unknown__"
+                counts[key] = counts.get(key, 0) + 1
+
+            progress.advance(task)
+
+    table = Table(title="Scan Results")
+    table.add_column("Language")
+    table.add_column("Files", justify="right")
+    for lang_key, n in sorted(counts.items(), key=lambda x: -x[1]):
+        style = "red" if lang_key == "de" else ""
+        label = f"{lang_key} [dim](discarded)[/dim]" if lang_key == "de" else lang_key
+        table.add_row(label, str(n), style=style)
+    if missing:
+        table.add_row("[dim]missing on disk[/dim]", str(missing))
+    console.print(table)
+    console.print(
+        f"\n[green]Done.[/green] Scanned {len(items)} file(s): "
+        f"[red]{discarded} discarded[/red], {missing} missing, "
+        f"{len(items) - discarded - missing} tagged."
+    )
 
 
 async def cmd_scrape(

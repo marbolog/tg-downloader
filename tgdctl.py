@@ -269,6 +269,7 @@ app commands (proxied into the running container):
   discard                 Review downloaded files and delete unwanted ones
   history                 Show recently downloaded files
   scrape [--channel X] [--limit N] [--since DATE]  Backfill media from history (pauses listener briefly)
+  scan-languages              Detect language for untagged files; discard German ones
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -296,6 +297,8 @@ app commands (proxied into the running container):
     p.add_argument("--channel", metavar="IDENTIFIER", default=None)
     p.add_argument("--limit", type=int, default=None, metavar="N")
     p.add_argument("--since", metavar="YYYY-MM-DD", default=None)
+
+    sub.add_parser("scan-languages")
 
     args = parser.parse_args()
 
@@ -333,6 +336,8 @@ app commands (proxied into the running container):
         if args.since:
             extra += ["--since", args.since]
         sys.exit(run_with_restart("scrape", *extra))
+    elif args.command == "scan-languages":
+        sys.exit(app("scan-languages"))
 
 
 if __name__ == "__main__":

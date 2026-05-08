@@ -219,6 +219,23 @@ class Database:
             """).fetchall()
             return [dict(r) for r in rows]
 
+    def get_untagged_downloaded(self) -> list[dict]:
+        """Returns downloaded files with no language tag and a valid local_path."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT m.*, c.identifier AS channel_identifier
+                   FROM media_messages m
+                   JOIN channels c ON m.channel_id = c.id
+                   WHERE m.status = 'downloaded' AND m.language IS NULL
+                     AND m.local_path IS NOT NULL
+                   ORDER BY m.downloaded_at DESC"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def set_language(self, media_id: int, language: str | None) -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE media_messages SET language=? WHERE id=?", (language, media_id))
+
     def get_download_history(self, limit: int = 20) -> list[dict]:
         """Returns the most recently downloaded items, newest first."""
         with self._conn() as conn:
