@@ -44,3 +44,6 @@ def _apply_defaults(raw: dict) -> None:
     filters = raw.setdefault("filters", {})
     filters.setdefault("extensions", [])
     filters["extensions"] = [e.lower().lstrip(".") for e in filters["extensions"]]
+    filters.setdefault("discard_topics", {})
+    filters.setdefault("topic_min_matches", 2)
+    filters.setdefault("topic_min_keyword_occurrences", 1)

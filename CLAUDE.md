@@ -119,6 +119,8 @@ uv run tgdctl channels               # list subscribed channels
 uv run tgdctl discard                # review downloaded files and delete unwanted ones (no listener restart needed)
 uv run tgdctl history [--limit N]    # show recently downloaded files
 uv run tgdctl unsubscribe @channel   # unsubscribe from a channel
+uv run tgdctl scan-languages         # retroactively detect language for untagged files; discard German ones
+uv run tgdctl scan-topics            # retroactively apply topic filters to downloaded files; discard matches
 ```
 Downloaded files appear in `./data/downloads/` on the host.
 
@@ -161,17 +163,36 @@ On each `listen` startup the listener:
 
 `downloader.py` limits concurrency to `CONCURRENT_DOWNLOADS = 1` via `asyncio.Semaphore`. Raise to 3 on faster connections; keep at 1 on Raspberry Pi — each concurrent download runs Telethon's MTProto crypto in software AES, which pegs ARM cores and spins the fan under sustained backfill load.
 
-### Language filter (`lang_filter.py`)
+### Content filters (`lang_filter.py`)
 
-After each successful download, `should_discard(file_path, ext)` is called. If it returns `True`, the file is deleted and the record is marked `discarded` in the DB without ever being marked `downloaded`.
+After each successful download, `analyze_file(file_path, ext, topic_keywords, ...)` is called. It extracts text once and runs both language detection and topic filtering. If either check triggers, the file is deleted and the record is marked `discarded` without ever being marked `downloaded`.
 
-Detection is two-stage:
+**Language detection** — two-stage:
 
 1. **Text extraction + langdetect** — extracts text from the first 4 pages (PDF via PyMuPDF) or first 3 content files (EPUB via zipfile). If ≥ 300 chars are found, `langdetect` is run; files detected as German (`de`) with confidence ≥ 0.90 are discarded. `DetectorFactory.seed = 0` ensures deterministic results.
 
 2. **Filename heuristic** — fallback used only when text extraction yields nothing (image-based / scanned PDFs). Discards if the filename contains a German umlaut (`ä ö ü ß Ä Ö Ü`) or a German month name that differs from English (`januar`, `februar`, `märz`, `mai`, `juni`, `juli`, `oktober`, `dezember`). Months identical to English (`april`, `august`, `september`, `november`) are intentionally excluded to avoid false positives.
 
-Formats with no text extraction support (MOBI, AZW3, CBR, CBZ, DJVU, FB2) are always kept; only the filename heuristic applies if the extension is `pdf` or `epub`.
+**Topic filtering** — keyword-based discard configured in `config.yaml`:
+
+```yaml
+filters:
+  discard_topics:
+    cars:
+      - automobile
+      - horsepower
+      - ferrari
+  topic_min_matches: 2              # distinct keywords that must match (default: 2)
+  topic_min_keyword_occurrences: 2  # each keyword must appear this many times (default: 1)
+```
+
+Topic detection uses a deeper text sample than language detection: first 15 PDF pages (vs 4) plus document metadata (PDF `title`/`subject`/`keywords` properties; EPUB `dc:title`/`dc:subject`/`dc:description` from the OPF manifest). EPUB TOC/nav files are included for topic extraction since chapter titles are dense topic vocabulary. Metadata is excluded from language detection to avoid bias from English bibliographic fields in non-English books.
+
+`compile_topic_patterns()` pre-compiles keyword regexes once per session. Matching uses whole-word boundaries (`\b`) with `finditer` + early exit to avoid scanning entire documents when the threshold is already met. The debug log records which specific keywords triggered each match.
+
+Use `tgdctl scan-topics` to apply topic filters retroactively to already-downloaded files.
+
+Formats with no text extraction support (MOBI, AZW3, CBR, CBZ, DJVU, FB2) are always kept; filters only apply to `pdf` and `epub`.
 
 **Critical**: the item dict passed to `download_item` must include `"ext"`. Both `_backfill_missed` and `_handle` in `listener.py` explicitly set this field; `_flush_pending` gets it from the full DB row automatically.
 

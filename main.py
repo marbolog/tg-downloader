@@ -92,6 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("scan-languages", help="Retroactively detect language for untagged downloaded files; auto-discard German ones")
 
+    sub.add_parser("scan-topics", help="Retroactively apply topic filters from config to already-downloaded files; auto-discard matches")
+
     return parser
 
 
@@ -114,6 +116,9 @@ async def run(args) -> None:
         return
     if args.command == "scan-languages":
         cmd_scan_languages(db)
+        return
+    if args.command == "scan-topics":
+        cmd_scan_topics(db, config)
         return
     if args.command == "discard":
         from ui import select_discard
@@ -316,6 +321,77 @@ def cmd_scan_languages(db: Database) -> None:
         f"\n[green]Done.[/green] Scanned {len(items)} file(s): "
         f"[red]{discarded} discarded[/red], {missing} missing, "
         f"{len(items) - discarded - missing} tagged."
+    )
+
+
+def cmd_scan_topics(db: Database, config: dict) -> None:
+    from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+    from lang_filter import compile_topic_patterns, detect_topic
+
+    topic_keywords = config["filters"].get("discard_topics") or {}
+    topic_min_matches = config["filters"].get("topic_min_matches", 2)
+    topic_min_occurrences = config["filters"].get("topic_min_keyword_occurrences", 1)
+
+    if not topic_keywords:
+        console.print("[yellow]No discard_topics configured — nothing to scan.[/yellow]")
+        return
+
+    items = db.get_downloaded_media()
+    if not items:
+        console.print("[yellow]No downloaded files found.[/yellow]")
+        return
+
+    console.print(f"[dim]Scanning {len(items)} file(s) against {len(topic_keywords)} topic(s)…[/dim]")
+
+    compiled = compile_topic_patterns(topic_keywords)
+    counts: dict[str, int] = {}
+    discarded = 0
+    missing = 0
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Detecting topics", total=len(items))
+        for item in items:
+            path = Path(item["local_path"])
+            if not path.exists():
+                missing += 1
+                progress.advance(task)
+                continue
+
+            ext = (item.get("ext") or "").lower()
+            topic = detect_topic(path, ext, topic_keywords, topic_min_matches, topic_min_occurrences, compiled_patterns=compiled)
+
+            if topic:
+                path.unlink(missing_ok=True)
+                db.mark_discarded(item["id"])
+                discarded += 1
+                counts[topic] = counts.get(topic, 0) + 1
+                log.info(f"Scan-discarded (topic: {topic}): {item['filename']}")
+
+            progress.advance(task)
+
+    if counts:
+        table = Table(title="Scan Results")
+        table.add_column("Topic")
+        table.add_column("Discarded", justify="right")
+        for topic_name, n in sorted(counts.items(), key=lambda x: -x[1]):
+            table.add_row(topic_name, str(n), style="red")
+        if missing:
+            table.add_row("[dim]missing on disk[/dim]", str(missing))
+        console.print(table)
+    else:
+        console.print("[green]No topic matches found.[/green]")
+        if missing:
+            console.print(f"[dim]{missing} file(s) not found on disk.[/dim]")
+
+    console.print(
+        f"\n[green]Done.[/green] Scanned {len(items)} file(s): "
+        f"[red]{discarded} discarded[/red], {missing} missing."
     )
 
 

@@ -17,3 +17,39 @@ filters:
   extensions: []
   # ebook example:
   # extensions: ["pdf", "epub", "mobi", "azw3", "fb2", "djvu", "djv", "cbr", "cbz"]
+
+  # Optional: auto-discard files whose content matches topic keywords.
+  # Only PDF and EPUB files are scanned; other formats are always kept.
+  #
+  # Matching logic:
+  #   topic_min_matches (default: 2) — how many distinct keywords must match.
+  #   topic_min_keyword_occurrences (default: 1) — a keyword only counts if it
+  #     appears at least this many times. Raise to 2-3 to ignore casual mentions.
+  #
+  # Detection uses the document's title/subject metadata (PDF properties, EPUB
+  # dc:subject) plus the first ~15 pages of body text, so books that clearly
+  # state their topic in metadata are caught even with short extracted text.
+  # Run `tgdctl scan-topics` to apply filters retroactively to existing files.
+  #
+  # discard_topics:
+  #   cars:
+  #     - automobile
+  #     - racecar
+  #     - horsepower
+  #     - ferrari
+  #     - porsche
+  #     - motor racing
+  #     - formula 1
+  #     - transmission
+  #     - carburetor
+  #   weapons:
+  #     - firearm
+  #     - rifle
+  #     - pistol
+  #     - ammunition
+  #     - ballistic
+  #     - sniper
+  #     - caliber
+  #     - holster
+  # topic_min_matches: 2
+  # topic_min_keyword_occurrences: 2

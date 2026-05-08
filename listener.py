@@ -16,14 +16,17 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     destination = Path(config["download"]["destination"])
     allowed = set(config["filters"]["extensions"])
     retention_days = config["download"]["retention_days"]
+    topic_keywords = config["filters"].get("discard_topics") or {}
+    topic_min_matches = config["filters"].get("topic_min_matches", 2)
+    topic_min_occurrences = config["filters"].get("topic_min_keyword_occurrences", 1)
     destination.mkdir(parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(CONCURRENT_DOWNLOADS)
 
     # Download any items that were recorded but not yet downloaded in a previous session.
-    await _flush_pending(client, db, destination, semaphore)
+    await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
 
     # Fetch and download messages that arrived while the service was down.
-    await _backfill_missed(client, db, allowed, destination, semaphore)
+    await _backfill_missed(client, db, allowed, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
 
     # Schedule the hourly retention cleanup as a background task.
     asyncio.create_task(_cleanup_loop(db, retention_days))
@@ -36,7 +39,7 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     @client.on(events.NewMessage)
     async def on_new_message(event):
         try:
-            await _handle(event, db, allowed, client, destination, semaphore)
+            await _handle(event, db, allowed, client, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
         except Exception as exc:
             log.error(f"Error handling message {event.message.id}: {exc}", exc_info=True)
 
@@ -45,7 +48,13 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
 
 
 async def _flush_pending(
-    client: TelegramClient, db: Database, dest: Path, semaphore: asyncio.Semaphore
+    client: TelegramClient,
+    db: Database,
+    dest: Path,
+    semaphore: asyncio.Semaphore,
+    topic_keywords: dict,
+    topic_min_matches: int,
+    topic_min_occurrences: int,
 ) -> None:
     """Download all items that are pending in the DB (e.g. from a previous scrape)."""
     pending = db.get_pending_media()
@@ -53,7 +62,11 @@ async def _flush_pending(
         return
     log.info(f"Flushing {len(pending)} pending item(s) from previous session(s)...")
     results = await asyncio.gather(
-        *[download_item(client, db, item, dest, semaphore) for item in pending],
+        *[download_item(client, db, item, dest, semaphore,
+                        topic_keywords=topic_keywords,
+                        topic_min_matches=topic_min_matches,
+                        topic_min_occurrences=topic_min_occurrences)
+          for item in pending],
         return_exceptions=True,
     )
     ok = sum(1 for r in results if r is True)
@@ -66,6 +79,9 @@ async def _backfill_missed(
     allowed: set,
     dest: Path,
     semaphore: asyncio.Semaphore,
+    topic_keywords: dict,
+    topic_min_matches: int,
+    topic_min_occurrences: int,
 ) -> None:
     """Fetch messages that arrived while the service was down and download them."""
     for ch in db.list_channels():
@@ -114,6 +130,9 @@ async def _backfill_missed(
                         "ext": item_meta["ext"],
                     },
                     dest, semaphore, message=message,
+                    topic_keywords=topic_keywords,
+                    topic_min_matches=topic_min_matches,
+                    topic_min_occurrences=topic_min_occurrences,
                 ))
 
         if tasks:
@@ -160,6 +179,9 @@ async def _handle(
     client: TelegramClient,
     dest: Path,
     semaphore: asyncio.Semaphore,
+    topic_keywords: dict,
+    topic_min_matches: int,
+    topic_min_occurrences: int,
 ) -> None:
     if not event.message.media:
         return
@@ -212,6 +234,9 @@ async def _handle(
                 "ext": item_meta["ext"],
             },
             dest, semaphore, message=event.message,
+            topic_keywords=topic_keywords,
+            topic_min_matches=topic_min_matches,
+            topic_min_occurrences=topic_min_occurrences,
         ))
 
 

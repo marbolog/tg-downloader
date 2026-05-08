@@ -5,7 +5,7 @@ from pathlib import Path
 from telethon import TelegramClient
 
 from db import Database
-from lang_filter import DISCARD_LANG, detect_language
+from lang_filter import DISCARD_LANG, analyze_file
 from utils import human_size, unique_path
 
 log = logging.getLogger(__name__)
@@ -19,7 +19,11 @@ async def download_item(
     item: dict,
     dest: Path,
     semaphore: asyncio.Semaphore,
+    *,
     message=None,
+    topic_keywords: dict | None = None,
+    topic_min_matches: int = 2,
+    topic_min_occurrences: int = 1,
 ) -> bool:
     """Download one media item to dest. Returns True on success.
 
@@ -42,11 +46,20 @@ async def download_item(
 
             await client.download_media(message, file=str(filepath))
 
-            lang = detect_language(filepath, item.get("ext") or "")
+            ext = item.get("ext") or ""
+
+            lang, topic = analyze_file(filepath, ext, topic_keywords, topic_min_matches, topic_min_occurrences)
+
             if lang == DISCARD_LANG:
                 filepath.unlink(missing_ok=True)
                 db.mark_discarded(item["id"])
                 log.info(f"[{label}] Auto-discarded (German): {item['filename']}")
+                return True
+
+            if topic:
+                filepath.unlink(missing_ok=True)
+                db.mark_discarded(item["id"])
+                log.info(f"[{label}] Auto-discarded (topic: {topic}): {item['filename']}")
                 return True
 
             db.mark_downloaded(item["id"], str(filepath), language=lang)
