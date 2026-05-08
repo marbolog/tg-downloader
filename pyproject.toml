@@ -5,6 +5,8 @@ description = "Scrape Telegram channels for media files and interactively select
 requires-python = ">=3.11"
 dependencies = [
     "inquirerpy>=0.3.4",
+    "langdetect>=1.0.9",
+    "pymupdf>=1.25",
     "pyyaml>=6.0.3",
     "rich>=15.0.0",
     "telethon>=1.43.2",
@@ -18,4 +20,4 @@ tgdctl = "tgdctl:main"
 package = true
 
 [tool.setuptools]
-py-modules = ["main", "config", "db", "listener", "ui", "downloader", "utils", "tgdctl"]
+py-modules = ["main", "config", "db", "lang_filter", "listener", "ui", "downloader", "utils", "tgdctl"]

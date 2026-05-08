@@ -111,6 +111,7 @@ async def _backfill_missed(
                         "message_id": message.id,
                         "filename": item_meta["filename"],
                         "size": item_meta["size"],
+                        "ext": item_meta["ext"],
                     },
                     dest, semaphore, message=message,
                 ))
@@ -208,6 +209,7 @@ async def _handle(
                 "message_id": event.message.id,
                 "filename": item_meta["filename"],
                 "size": item_meta["size"],
+                "ext": item_meta["ext"],
             },
             dest, semaphore, message=event.message,
         ))

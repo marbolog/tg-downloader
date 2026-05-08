@@ -1,0 +1,154 @@
+"""Post-download language detection.
+
+Extracts a text sample from a downloaded file and returns whether it should
+be discarded based on language. Only PDF and EPUB are detectable; all other
+formats return False (keep).
+"""
+
+import logging
+import re
+import zipfile
+from html.parser import HTMLParser
+from pathlib import Path
+
+import fitz
+from langdetect import DetectorFactory, detect_langs
+from langdetect.lang_detect_exception import LangDetectException
+
+DetectorFactory.seed = 0  # make detection deterministic
+
+log = logging.getLogger(__name__)
+
+DISCARD_LANG = "de"
+_CONFIDENCE = 0.90
+_PDF_PAGES = 4
+_EPUB_CHAPTERS = 3
+_MIN_CHARS = 300
+
+# Filename-based German detection used as fallback when no text can be extracted
+# (e.g. image-only / scanned PDFs).
+_GERMAN_UMLAUTS = frozenset("äöüßÄÖÜ")
+_GERMAN_MONTHS = {
+    "januar", "februar", "märz", "april", "mai", "juni",
+    "juli", "august", "september", "oktober", "november", "dezember",
+}
+
+
+def should_discard(file_path: Path, ext: str) -> bool:
+    """Returns True if the file is detected as German.
+
+    Detection is two-stage:
+    1. Text extraction + langdetect (high confidence threshold).
+    2. Filename heuristic — German umlauts or month names — used only when
+       no text could be extracted (image-based / scanned PDFs).
+    """
+    lang = _detect_lang(file_path, ext)
+    if lang is not None:
+        discard = lang == DISCARD_LANG
+        if discard:
+            log.info(f"{file_path.name}: detected language '{lang}' — will discard")
+        else:
+            log.debug(f"{file_path.name}: detected language '{lang}' — keeping")
+        return discard
+
+    if ext in ("pdf", "epub") and _filename_is_german(file_path.name):
+        log.info(f"{file_path.name}: filename heuristic detected German — will discard")
+        return True
+
+    return False
+
+
+def _filename_is_german(filename: str) -> bool:
+    """Returns True if the filename contains German-specific characters or month names."""
+    if any(c in _GERMAN_UMLAUTS for c in filename):
+        return True
+    words = set(re.findall(r"[A-Za-zäöüÄÖÜß]+", filename.lower()))
+    return bool(words & _GERMAN_MONTHS)
+
+
+def _detect_lang(file_path: Path, ext: str) -> str | None:
+    """Returns ISO 639-1 language code or None if undetermined."""
+    try:
+        if ext == "pdf":
+            text = _pdf_text(file_path)
+        elif ext == "epub":
+            text = _epub_text(file_path)
+        else:
+            log.debug(f"{file_path.name}: language detection not supported for .{ext}")
+            return None
+
+        if len(text.strip()) < _MIN_CHARS:
+            log.debug(f"{file_path.name}: too little text ({len(text.strip())} chars) — skipping detection")
+            return None
+
+        results = detect_langs(text)
+        if not results:
+            return None
+
+        top = results[0]
+        log.debug(f"{file_path.name}: lang candidates {results}")
+        return top.lang if top.prob >= _CONFIDENCE else None
+
+    except LangDetectException:
+        log.debug(f"{file_path.name}: langdetect could not determine language")
+        return None
+    except Exception as exc:
+        log.warning(f"{file_path.name}: language detection error: {exc}")
+        return None
+
+
+def _pdf_text(file_path: Path) -> str:
+    doc = fitz.open(str(file_path))
+    pages = min(_PDF_PAGES, doc.page_count)
+    return " ".join(doc[i].get_text() for i in range(pages))
+
+
+def _epub_text(file_path: Path) -> str:
+    with zipfile.ZipFile(file_path) as zf:
+        # Collect HTML content files, exclude navigation/TOC artifacts.
+        html_names = sorted(
+            n for n in zf.namelist()
+            if n.lower().endswith((".html", ".xhtml", ".htm"))
+            and "toc" not in n.lower()
+            and "nav" not in n.lower()
+        )
+        texts = []
+        for name in html_names[:_EPUB_CHAPTERS]:
+            try:
+                raw = zf.read(name).decode("utf-8", errors="ignore")
+                texts.append(_strip_html(raw))
+            except Exception:
+                continue
+        return " ".join(texts)
+
+
+class _TextExtractor(HTMLParser):
+    """Strips HTML tags, skipping script and style content."""
+
+    def __init__(self):
+        super().__init__()
+        self._parts: list[str] = []
+        self._skip = False
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in ("script", "style"):
+            self._skip = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style"):
+            self._skip = False
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip:
+            stripped = data.strip()
+            if stripped:
+                self._parts.append(stripped)
+
+    def text(self) -> str:
+        return " ".join(self._parts)
+
+
+def _strip_html(html: str) -> str:
+    extractor = _TextExtractor()
+    extractor.feed(html)
+    return extractor.text()

@@ -65,8 +65,9 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 - **rich** — tables, styled output
 - **PyYAML** — config file
 - **FastAPI + uvicorn** — web UI service (`webui/`)
-- **PyMuPDF** — PDF cover thumbnail extraction
+- **PyMuPDF** — PDF cover thumbnail extraction (webui) + text extraction for language detection (main app)
 - **Pillow** — image resizing for thumbnails
+- **langdetect** — language detection for automatic German-content filtering
 
 ### Entry points
 ```
@@ -84,6 +85,7 @@ uv run python main.py <command>
 | `config.py` | Load and validate `config.yaml` |
 | `db.py` | SQLite schema and all query methods (`Database` class) |
 | `listener.py` | Real-time listener; auto-downloads on arrival; startup backfill + flush pending; hourly retention cleanup |
+| `lang_filter.py` | Post-download language detection; auto-discards German files |
 | `ui.py` | Interactive `select_discard` checkbox UI (InquirerPy) |
 | `downloader.py` | `download_item` — single-file daemon-mode download via Telethon |
 | `utils.py` | Pure helpers: `human_size`, `unique_path` |
@@ -158,12 +160,26 @@ On each `listen` startup the listener:
 
 `downloader.py` limits concurrency to `CONCURRENT_DOWNLOADS = 1` via `asyncio.Semaphore`. Raise to 3 on faster connections; keep at 1 on Raspberry Pi — each concurrent download runs Telethon's MTProto crypto in software AES, which pegs ARM cores and spins the fan under sustained backfill load.
 
+### Language filter (`lang_filter.py`)
+
+After each successful download, `should_discard(file_path, ext)` is called. If it returns `True`, the file is deleted and the record is marked `discarded` in the DB without ever being marked `downloaded`.
+
+Detection is two-stage:
+
+1. **Text extraction + langdetect** — extracts text from the first 4 pages (PDF via PyMuPDF) or first 3 content files (EPUB via zipfile). If ≥ 300 chars are found, `langdetect` is run; files detected as German (`de`) with confidence ≥ 0.90 are discarded. `DetectorFactory.seed = 0` ensures deterministic results.
+
+2. **Filename heuristic** — fallback used only when text extraction yields nothing (image-based / scanned PDFs). Discards if the filename contains a German umlaut (`ä ö ü ß Ä Ö Ü`) or a German month name that differs from English (`januar`, `februar`, `märz`, `mai`, `juni`, `juli`, `oktober`, `dezember`). Months identical to English (`april`, `august`, `september`, `november`) are intentionally excluded to avoid false positives.
+
+Formats with no text extraction support (MOBI, AZW3, CBR, CBZ, DJVU, FB2) are always kept; only the filename heuristic applies if the extension is `pdf` or `epub`.
+
+**Critical**: the item dict passed to `download_item` must include `"ext"`. Both `_backfill_missed` and `_handle` in `listener.py` explicitly set this field; `_flush_pending` gets it from the full DB row automatically.
+
 ### Media statuses in DB
 | Status | Meaning |
 |---|---|
 | `pending` | Recorded but not yet downloaded (should be 0 after startup flush) |
 | `downloaded` | File is on disk |
-| `discarded` | User deleted via `discard` command |
+| `discarded` | Deleted — either by user via `discard` command or automatically by the language filter |
 | `expired` | Auto-deleted by retention cleanup |
 | `skipped` | Legacy — dismissed without downloading in the old manual workflow |
 

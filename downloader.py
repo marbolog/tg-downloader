@@ -5,6 +5,7 @@ from pathlib import Path
 from telethon import TelegramClient
 
 from db import Database
+from lang_filter import should_discard
 from utils import human_size, unique_path
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,13 @@ async def download_item(
                     raise ValueError("Message not found — may have been deleted from Telegram")
 
             await client.download_media(message, file=str(filepath))
+
+            if should_discard(filepath, item.get("ext") or ""):
+                filepath.unlink(missing_ok=True)
+                db.mark_discarded(item["id"])
+                log.info(f"[{label}] Auto-discarded (German): {item['filename']}")
+                return True
+
             db.mark_downloaded(item["id"], str(filepath))
             size_str = human_size(filepath.stat().st_size) if filepath.exists() else "?"
             log.info(f"[{label}] Downloaded: {item['filename']}  ({size_str})")
