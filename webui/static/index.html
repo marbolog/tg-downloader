@@ -240,14 +240,18 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 10px 14px;
 }
-.rag-bar { display: flex; gap: 8px; align-items: center; }
+.rag-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .rag-bar .btn { flex-shrink: 0; white-space: nowrap; }
 .rag-input {
-  flex: 1; padding: 8px 12px;
+  flex: 1 1 160px; min-width: 0; padding: 8px 12px;
   border: 1px solid var(--border); border-radius: 6px;
   font-size: .875rem; font-family: inherit; background: var(--bg);
 }
 .rag-input:focus { outline: none; border-color: var(--accent); }
+@media (max-width: 479px) {
+  .rag-input { flex: 1 1 100%; }
+  .rag-bar .btn { flex: 1; }
+}
 .rag-results { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .rag-chunk {
   background: var(--bg); border: 1px solid var(--border);
