@@ -22,6 +22,7 @@ async def download_item(
     topic_keywords: dict | None = None,
     topic_min_matches: int = 2,
     topic_min_occurrences: int = 1,
+    indexer=None,
 ) -> bool:
     """Download one media item to dest. Returns True on success.
 
@@ -30,6 +31,9 @@ async def download_item(
 
     If message is provided (a live Telethon message object), it is used directly
     and no Telegram fetch is needed.
+
+    If indexer is provided (a rag.indexer.Indexer), the file is indexed after
+    a successful download via a background asyncio task.
     """
     async with semaphore:
         filepath = unique_path(dest / item["filename"])
@@ -43,7 +47,7 @@ async def download_item(
                     db.mark_discarded(item["id"])
                     log.warning(
                         f"[{label}] Message {item['message_id']} not found on Telegram "
-                        f"(deleted?) — {item['filename']!r} marked discarded"
+                        f"(deleted?) -- {item['filename']!r} marked discarded"
                     )
                     return True
 
@@ -67,8 +71,6 @@ async def download_item(
 
             file_hash = None
             try:
-                # Hashing is disk-bound; offload so it doesn't block other awaits
-                # (e.g. event-loop message reception when concurrency > 1).
                 file_hash = await asyncio.to_thread(compute_sha256, filepath)
             except Exception as exc:
                 log.warning(f"[{label}] Hash failed for {item['filename']!r}: {exc}")
@@ -77,7 +79,32 @@ async def download_item(
             size_str = human_size(filepath.stat().st_size) if filepath.exists() else "?"
             lang_tag = f" [{lang}]" if lang else ""
             log.info(f"[{label}] Downloaded: {item['filename']}  ({size_str}){lang_tag}")
+
+            if indexer is not None:
+                asyncio.create_task(_index_async(indexer, db, item, filepath))
+
             return True
         except Exception as exc:
             log.error(f"[{label}] Failed to download {item['filename']!r}: {exc}")
             return False
+
+
+async def _index_async(indexer, db: Database, item: dict, filepath: Path) -> None:
+    """Index a downloaded file in the background. Errors are logged, not raised."""
+    try:
+        count = await asyncio.to_thread(
+            indexer.index_file,
+            item["id"],
+            filepath,
+            {
+                "filename": item["filename"],
+                "channel_title": item.get("channel_title", ""),
+                "channel_identifier": item.get("channel_identifier", ""),
+                "ext": item.get("ext", ""),
+            },
+        )
+        if count > 0:
+            db.mark_indexed(item["id"])
+            log.debug(f"RAG: indexed {item['filename']} ({count} chunks)")
+    except Exception as exc:
+        log.warning(f"RAG: indexing failed for {item['filename']!r}: {exc}")

@@ -23,27 +23,30 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     destination.mkdir(parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(concurrent_downloads)
 
-    # Download any items that were recorded but not yet downloaded in a previous session.
-    await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
+    rag_config = config.get("rag", {})
+    indexer = None
+    if rag_config.get("enabled"):
+        try:
+            from rag.indexer import Indexer
+            indexer = Indexer(rag_config)
+        except Exception as exc:
+            log.error(f"RAG: failed to initialise indexer -- {exc}. Continuing without RAG.")
 
-    # Re-download files that are marked 'downloaded' in the DB but missing from disk.
-    await _heal_missing(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
+    await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
+    await _heal_missing(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
+    await _backfill_missed(client, db, allowed, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
 
-    # Fetch and download messages that arrived while the service was down.
-    await _backfill_missed(client, db, allowed, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
-
-    # Schedule the hourly retention cleanup as a background task.
     asyncio.create_task(_cleanup_loop(db, retention_days))
 
     channels = db.list_channels()
-    log.info(f"Listening — {len(channels)} subscribed channel(s)")
+    log.info(f"Listening -- {len(channels)} subscribed channel(s)")
     for c in channels:
-        log.info(f"  · {c['title']} ({c['identifier']})")
+        log.info(f"  . {c['title']} ({c['identifier']})")
 
     @client.on(events.NewMessage)
     async def on_new_message(event):
         try:
-            await _handle(event, db, allowed, client, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
+            await _handle(event, db, allowed, client, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
         except Exception as exc:
             log.error(f"Error handling message {event.message.id}: {exc}", exc_info=True)
 
@@ -52,13 +55,7 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
 
 
 async def _flush_pending(
-    client: TelegramClient,
-    db: Database,
-    dest: Path,
-    semaphore: asyncio.Semaphore,
-    topic_keywords: dict,
-    topic_min_matches: int,
-    topic_min_occurrences: int,
+    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer
 ) -> None:
     """Download all items that are pending in the DB (e.g. from a previous scrape)."""
     pending = db.get_pending_media()
@@ -69,7 +66,8 @@ async def _flush_pending(
         *[download_item(client, db, item, dest, semaphore,
                         topic_keywords=topic_keywords,
                         topic_min_matches=topic_min_matches,
-                        topic_min_occurrences=topic_min_occurrences)
+                        topic_min_occurrences=topic_min_occurrences,
+                        indexer=indexer)
           for item in pending],
         return_exceptions=True,
     )
@@ -78,13 +76,7 @@ async def _flush_pending(
 
 
 async def _heal_missing(
-    client: TelegramClient,
-    db: Database,
-    dest: Path,
-    semaphore: asyncio.Semaphore,
-    topic_keywords: dict,
-    topic_min_matches: int,
-    topic_min_occurrences: int,
+    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer
 ) -> None:
     """Re-download files marked 'downloaded' in the DB but absent from disk."""
     downloaded = db.get_downloaded_media()
@@ -99,7 +91,8 @@ async def _heal_missing(
         *[download_item(client, db, item, dest, semaphore,
                         topic_keywords=topic_keywords,
                         topic_min_matches=topic_min_matches,
-                        topic_min_occurrences=topic_min_occurrences)
+                        topic_min_occurrences=topic_min_occurrences,
+                        indexer=indexer)
           for item in missing],
         return_exceptions=True,
     )
@@ -108,21 +101,14 @@ async def _heal_missing(
 
 
 async def _backfill_missed(
-    client: TelegramClient,
-    db: Database,
-    allowed: set,
-    dest: Path,
-    semaphore: asyncio.Semaphore,
-    topic_keywords: dict,
-    topic_min_matches: int,
-    topic_min_occurrences: int,
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer
 ) -> None:
     """Fetch messages that arrived while the service was down and download them."""
     for ch in db.list_channels():
         max_id = db.get_max_message_id(ch["id"])
         if max_id is None:
             log.warning(
-                f"Backfill: no prior messages recorded for {ch['title']!r} — "
+                f"Backfill: no prior messages recorded for {ch['title']!r} -- "
                 f"run 'scrape --channel {ch['identifier']}' to pull existing history"
             )
             continue
@@ -169,6 +155,7 @@ async def _backfill_missed(
                     topic_keywords=topic_keywords,
                     topic_min_matches=topic_min_matches,
                     topic_min_occurrences=topic_min_occurrences,
+                    indexer=indexer,
                 ))
 
         if tasks:
@@ -209,30 +196,20 @@ def _run_cleanup(db: Database, retention_days: int) -> None:
 
 
 async def _handle(
-    event,
-    db: Database,
-    allowed: set,
-    client: TelegramClient,
-    dest: Path,
-    semaphore: asyncio.Semaphore,
-    topic_keywords: dict,
-    topic_min_matches: int,
-    topic_min_occurrences: int,
+    event, db, allowed, client, dest, semaphore,
+    topic_keywords, topic_min_matches, topic_min_occurrences, indexer
 ) -> None:
     if not event.message.media:
         return
 
-    # event.chat_id uses Telethon's marked IDs (negative for channels/groups).
-    # entity.id at subscribe time is the raw positive ID. Extract it from peer_id directly.
     peer = event.message.peer_id
     if isinstance(peer, PeerChannel):
         raw_id = peer.channel_id
     elif isinstance(peer, PeerChat):
         raw_id = peer.chat_id
     else:
-        return  # DM, ignore
+        return
 
-    # Check DB on every message so subscribe/unsubscribe takes effect without restart.
     channel = db.get_channel_by_telegram_id(raw_id)
     if channel is None:
         return
@@ -256,7 +233,7 @@ async def _handle(
         caption=(event.message.message or "")[:120],
     )
     if db_id:
-        log.info(f"[{channel['title']}] New media: {item_meta['filename']} ({item_meta['size']} B) — queuing download")
+        log.info(f"[{channel['title']}] New media: {item_meta['filename']} ({item_meta['size']} B) -- queuing download")
         asyncio.create_task(download_item(
             client, db,
             {
@@ -273,6 +250,7 @@ async def _handle(
             topic_keywords=topic_keywords,
             topic_min_matches=topic_min_matches,
             topic_min_occurrences=topic_min_occurrences,
+            indexer=indexer,
         ))
 
 
