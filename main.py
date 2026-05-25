@@ -572,7 +572,7 @@ async def cmd_ask(db: Database, config: dict, args) -> None:
     from rag.generator import generate, OllamaUnavailableError
 
     indexer = Indexer(rag_config)
-    top_k = args.top_k or rag_config.get("top_k", 5)
+    top_k = args.top_k if args.top_k is not None else rag_config.get("top_k", 5)
     channel = getattr(args, "channel", None)
 
     chunks = retrieve(args.query, indexer, top_k=top_k, channel_identifier=channel)
@@ -582,9 +582,13 @@ async def cmd_ask(db: Database, config: dict, args) -> None:
 
     if getattr(args, "sources_only", False):
         console.print("\n[bold]Sources:[/bold]")
+        seen: set[str] = set()
         for chunk in chunks:
-            loc = f"p. {chunk['page']}" if chunk.get("page") is not None else (chunk.get("chapter") or "")
-            console.print(f"  . {chunk['filename']:<45} {loc}")
+            fn = chunk["filename"]
+            if fn not in seen:
+                seen.add(fn)
+                loc = f"p. {chunk['page']}" if chunk.get("page") is not None else (chunk.get("chapter") or "")
+                console.print(f"  . {fn:<45} {loc}")
         return
 
     console.print("\n[bold]Answer:[/bold]")
