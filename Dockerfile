@@ -8,6 +8,7 @@ RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
 # Copy source
 COPY *.py ./
+COPY rag/ ./rag/
 
 # data/ holds the session file, the SQLite database, and downloaded files (mounted from host)
 RUN mkdir -p data
