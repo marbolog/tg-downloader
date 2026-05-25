@@ -23,15 +23,11 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     destination.mkdir(parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(concurrent_downloads)
 
-    # Auto-indexing on download is disabled in the listener: loading sentence-transformers
-    # alongside Telethon inside a running asyncio event loop causes segfaults on ARM.
-    # Run `tgdctl index` separately to index downloaded files.
-    indexer = None
+    await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
+    await _heal_missing(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
+    await _backfill_missed(client, db, allowed, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
 
-    await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
-    await _heal_missing(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
-    await _backfill_missed(client, db, allowed, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
-
+    asyncio.create_task(_heal_search_index(db))
     asyncio.create_task(_cleanup_loop(db, retention_days))
 
     channels = db.list_channels()
@@ -42,7 +38,7 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     @client.on(events.NewMessage)
     async def on_new_message(event):
         try:
-            await _handle(event, db, allowed, client, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
+            await _handle(event, db, allowed, client, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
         except Exception as exc:
             log.error(f"Error handling message {event.message.id}: {exc}", exc_info=True)
 
@@ -51,7 +47,7 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
 
 
 async def _flush_pending(
-    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer
+    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences
 ) -> None:
     """Download all items that are pending in the DB (e.g. from a previous scrape)."""
     pending = db.get_pending_media()
@@ -62,8 +58,7 @@ async def _flush_pending(
         *[download_item(client, db, item, dest, semaphore,
                         topic_keywords=topic_keywords,
                         topic_min_matches=topic_min_matches,
-                        topic_min_occurrences=topic_min_occurrences,
-                        indexer=indexer)
+                        topic_min_occurrences=topic_min_occurrences)
           for item in pending],
         return_exceptions=True,
     )
@@ -72,7 +67,7 @@ async def _flush_pending(
 
 
 async def _heal_missing(
-    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer
+    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences
 ) -> None:
     """Re-download files marked 'downloaded' in the DB but absent from disk."""
     downloaded = db.get_downloaded_media()
@@ -87,8 +82,7 @@ async def _heal_missing(
         *[download_item(client, db, item, dest, semaphore,
                         topic_keywords=topic_keywords,
                         topic_min_matches=topic_min_matches,
-                        topic_min_occurrences=topic_min_occurrences,
-                        indexer=indexer)
+                        topic_min_occurrences=topic_min_occurrences)
           for item in missing],
         return_exceptions=True,
     )
@@ -97,7 +91,7 @@ async def _heal_missing(
 
 
 async def _backfill_missed(
-    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences
 ) -> None:
     """Fetch messages that arrived while the service was down and download them."""
     for ch in db.list_channels():
@@ -151,7 +145,6 @@ async def _backfill_missed(
                     topic_keywords=topic_keywords,
                     topic_min_matches=topic_min_matches,
                     topic_min_occurrences=topic_min_occurrences,
-                    indexer=indexer,
                 ))
 
         if tasks:
@@ -159,6 +152,27 @@ async def _backfill_missed(
             results = await asyncio.gather(*tasks, return_exceptions=True)
             ok = sum(1 for r in results if r is True)
             log.info(f"Backfill {ch['title']}: {ok}/{len(tasks)} succeeded")
+
+
+async def _heal_search_index(db: Database) -> None:
+    missing = db.search_fts_missing_media_ids()
+    if not missing:
+        return
+    log.info(f"Search index heal: {len(missing)} file(s) not yet indexed, indexing in background...")
+    from search.indexer import index_file
+    ok = 0
+    for item in missing:
+        try:
+            result = await asyncio.to_thread(
+                index_file, db,
+                item["media_id"], item["local_path"], item["ext"],
+                item["filename"], item.get("channel_identifier", ""),
+            )
+            if result:
+                ok += 1
+        except Exception as exc:
+            log.warning(f"Search heal failed for {item['filename']!r}: {exc}")
+    log.info(f"Search index heal complete: {ok}/{len(missing)} indexed")
 
 
 async def _cleanup_loop(db: Database, retention_days: int) -> None:
@@ -193,7 +207,7 @@ def _run_cleanup(db: Database, retention_days: int) -> None:
 
 async def _handle(
     event, db, allowed, client, dest, semaphore,
-    topic_keywords, topic_min_matches, topic_min_occurrences, indexer
+    topic_keywords, topic_min_matches, topic_min_occurrences
 ) -> None:
     if not event.message.media:
         return
@@ -246,7 +260,6 @@ async def _handle(
             topic_keywords=topic_keywords,
             topic_min_matches=topic_min_matches,
             topic_min_occurrences=topic_min_occurrences,
-            indexer=indexer,
         ))
 
 
