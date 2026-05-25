@@ -364,6 +364,22 @@ function _ragError(el, msg) {
   el.replaceChildren(p);
 }
 
+function renderSnippet(container, raw) {
+  container.textContent = '';
+  var parts = raw.split(/<<|>>/);
+  var inMark = false;
+  parts.forEach(function(part) {
+    if (inMark) {
+      var mark = document.createElement('mark');
+      mark.textContent = part;
+      container.appendChild(mark);
+    } else {
+      container.appendChild(document.createTextNode(part));
+    }
+    inMark = !inMark;
+  });
+}
+
 function _renderRagResults(chunks, container, answer) {
   container.replaceChildren();
   container.style.display = 'block';
@@ -396,7 +412,7 @@ function _renderRagResults(chunks, container, answer) {
     src.textContent = chunk.filename + (loc ? ' — ' + loc : '');
     const txt = document.createElement('div');
     txt.className = 'rag-chunk-text';
-    txt.textContent = chunk.text;
+    renderSnippet(txt, chunk.text || '');
     div.appendChild(src);
     div.appendChild(txt);
     container.appendChild(div);
@@ -410,7 +426,7 @@ async function ragSearch() {
   _ragStatus(el, 'Searching...');
   try {
     const data = await fetch(
-      '/api/rag/search?' + new URLSearchParams({ q, channel: S.channel || '' })
+      '/api/search?' + new URLSearchParams({ q, channel: S.channel || '' })
     ).then(r => r.json());
     _renderRagResults(data.chunks || [], el, null);
   } catch {
@@ -424,14 +440,14 @@ async function ragAsk() {
   const el = document.getElementById('rag-results');
   _ragStatus(el, 'Generating answer...');
   try {
-    const data = await fetch('/api/rag/ask', {
+    const data = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: q, channel: S.channel || '' }),
     }).then(r => r.json());
     _renderRagResults(data.chunks || [], el, data.answer || null);
   } catch {
-    _ragError(el, 'Ask failed. Is Ollama running?');
+    _ragError(el, 'Ask AI failed. Check that ANTHROPIC_API_KEY is configured.');
   }
 }
 
