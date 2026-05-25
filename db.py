@@ -265,12 +265,10 @@ class Database:
                     for c in chunks
                 ],
             )
-            conn.commit()
 
     def search_fts_delete_file(self, media_id: int) -> None:
         with self._conn() as conn:
             conn.execute("DELETE FROM search_fts WHERE media_id = ?", (str(media_id),))
-            conn.commit()
 
     def search_fts_query(
         self, q: str, top_k: int = 8, channel_identifier: str = ""
