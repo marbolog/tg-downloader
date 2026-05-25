@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS media_messages (
     language      TEXT,
     UNIQUE(channel_id, message_id)
 );
+
+CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+    text,
+    media_id           UNINDEXED,
+    chunk_idx          UNINDEXED,
+    page               UNINDEXED,
+    chapter            UNINDEXED,
+    filename           UNINDEXED,
+    channel_identifier UNINDEXED,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
 """
 
 # Each entry is tried once; OperationalError from a duplicate column is silently swallowed.
@@ -195,6 +206,7 @@ class Database:
                 "UPDATE media_messages SET status='discarded', local_path=NULL WHERE id=?",
                 (media_id,),
             )
+            conn.execute("DELETE FROM search_fts WHERE media_id = ?", (str(media_id),))
 
     def mark_expired(self, media_id: int) -> None:
         with self._conn() as conn:
@@ -202,6 +214,7 @@ class Database:
                 "UPDATE media_messages SET status='expired', local_path=NULL WHERE id=?",
                 (media_id,),
             )
+            conn.execute("DELETE FROM search_fts WHERE media_id = ?", (str(media_id),))
 
     def get_unindexed_downloaded(self) -> list[dict]:
         """Returns downloaded files with no indexed_at timestamp."""
@@ -223,6 +236,91 @@ class Database:
                 "UPDATE media_messages SET indexed_at=datetime('now') WHERE id=?",
                 (media_id,),
             )
+
+    # --- FTS5 full-text search ---
+
+    def search_fts_index_file(
+        self,
+        media_id: int,
+        chunks: list[dict],
+        filename: str,
+        channel_identifier: str = "",
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM search_fts WHERE media_id = ?", (str(media_id),))
+            conn.executemany(
+                """INSERT INTO search_fts
+                   (text, media_id, chunk_idx, page, chapter, filename, channel_identifier)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        c["text"],
+                        str(media_id),
+                        c["chunk_idx"],
+                        c.get("page"),
+                        c.get("chapter"),
+                        filename,
+                        channel_identifier,
+                    )
+                    for c in chunks
+                ],
+            )
+            conn.commit()
+
+    def search_fts_delete_file(self, media_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM search_fts WHERE media_id = ?", (str(media_id),))
+            conn.commit()
+
+    def search_fts_query(
+        self, q: str, top_k: int = 8, channel_identifier: str = ""
+    ) -> list[dict]:
+        with self._conn() as conn:
+            if channel_identifier:
+                rows = conn.execute(
+                    """SELECT media_id, filename, page, chapter,
+                              snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
+                       FROM search_fts
+                       WHERE search_fts MATCH ? AND channel_identifier = ?
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (q, channel_identifier, top_k),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT media_id, filename, page, chapter,
+                              snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
+                       FROM search_fts
+                       WHERE search_fts MATCH ?
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (q, top_k),
+                ).fetchall()
+            return [
+                {
+                    "media_id": int(r["media_id"]),
+                    "filename": r["filename"],
+                    "page": r["page"],
+                    "chapter": r["chapter"],
+                    "text": r["text"],
+                }
+                for r in rows
+            ]
+
+    def search_fts_missing_media_ids(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT m.id AS media_id, m.filename, m.ext,
+                          m.local_path, c.identifier AS channel_identifier
+                   FROM media_messages m
+                   JOIN channels c ON m.channel_id = c.id
+                   WHERE m.status = 'downloaded'
+                     AND m.ext IN ('pdf', 'epub')
+                     AND CAST(m.id AS TEXT) NOT IN (
+                         SELECT DISTINCT media_id FROM search_fts
+                     )"""
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def get_status_counts(self) -> list[dict]:
         """Returns per-channel counts of each status and total."""
