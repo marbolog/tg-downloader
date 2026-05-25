@@ -328,6 +328,9 @@ async def fts_ask(req: _AskRequest):
                 (req.query, k),
             ).fetchall()
         chunks = [dict(r) for r in rows]
+    except Exception as exc:
+        log.warning(f"FTS5 query error for {req.query!r}: {exc}")
+        chunks = []
     finally:
         conn.close()
 
