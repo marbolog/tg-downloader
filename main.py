@@ -137,7 +137,7 @@ async def run(args) -> None:
         cmd_scan_hashes(db)
         return
     if args.command == "index":
-        await cmd_index(db, config)
+        cmd_index(db, config)
         return
     if args.command == "ask":
         await cmd_ask(db, config, args)
@@ -497,121 +497,63 @@ def cmd_scan_hashes(db: Database) -> None:
         console.print("[green]No duplicate files found.[/green]")
 
 
-async def cmd_index(db: Database, config: dict) -> None:
-    from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+def cmd_index(db: Database, config: dict) -> None:
+    from search.indexer import index_file
 
-    rag_config = config.get("rag", {})
-    if not rag_config.get("enabled"):
-        console.print("[yellow]RAG not enabled -- set rag.enabled: true in config.yaml[/yellow]")
+    missing = db.search_fts_missing_media_ids()
+    if not missing:
+        print("All downloaded files are already indexed.")
         return
-
-    items = db.get_unindexed_downloaded()
-    if not items:
-        console.print("[green]All downloaded files are already indexed.[/green]")
-        return
-
-    from rag.indexer import Indexer
-    indexer = Indexer(rag_config)
-
-    _SUPPORTED = {"pdf", "epub"}
-    indexed = skipped = errors = 0
-
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task(f"Indexing {len(items)} file(s)", total=len(items))
-        for item in items:
-            ext = (item.get("ext") or "").lower()
-            local_path = item.get("local_path")
-            if ext not in _SUPPORTED or not local_path or not Path(local_path).exists():
-                skipped += 1
-                progress.advance(task)
-                continue
-            progress.update(task, description=item["filename"][:45])
-            try:
-                count = await asyncio.to_thread(
-                    indexer.index_file,
-                    item["id"],
-                    Path(local_path),
-                    {
-                        "filename": item["filename"],
-                        "channel_title": item.get("channel_title", ""),
-                        "channel_identifier": item.get("channel_identifier", ""),
-                        "ext": ext,
-                    },
-                )
-                if count > 0:
-                    db.mark_indexed(item["id"])
-                    indexed += 1
-                else:
-                    skipped += 1
-            except Exception as exc:
-                log.warning(f"Index failed for {item['filename']!r}: {exc}")
-                errors += 1
-            progress.advance(task)
-
-    console.print(
-        f"\n[green]Done.[/green] {indexed} indexed, "
-        f"{skipped} skipped (unsupported/missing), "
-        + (f"[red]{errors} errors[/red]." if errors else "0 errors.")
-    )
+    print(f"Indexing {len(missing)} file(s)...")
+    ok = 0
+    for item in missing:
+        result = index_file(
+            db,
+            item["media_id"],
+            item["local_path"],
+            item["ext"],
+            item["filename"],
+            item.get("channel_identifier", ""),
+        )
+        if result:
+            ok += 1
+            print(f"  [ok] {item['filename']}")
+        else:
+            print(f"  [skip] {item['filename']}")
+    print(f"Done: {ok}/{len(missing)} indexed.")
 
 
 async def cmd_ask(db: Database, config: dict, args) -> None:
-    rag_config = config.get("rag", {})
-    if not rag_config.get("enabled"):
-        console.print("[yellow]RAG not enabled -- set rag.enabled: true in config.yaml[/yellow]")
+    import os
+
+    top_k = config.get("search", {}).get("top_k", 8)
+    if args.top_k is not None:
+        top_k = args.top_k
+
+    if args.sources_only:
+        chunks = db.search_fts_query(args.query, top_k=top_k)
+        if not chunks:
+            print("No relevant content found.")
+            return
+        for i, c in enumerate(chunks, 1):
+            loc = f"p.{c['page']}" if c.get("page") else c.get("chapter", "")
+            print(f"[{i}] {c['filename']} ({loc})")
+            print(f"    {c['text'][:200]}")
         return
 
-    from rag.indexer import Indexer
-    from rag.retriever import retrieve
-    from rag.generator import generate, OllamaUnavailableError
-
-    indexer = Indexer(rag_config)
-    top_k = args.top_k if args.top_k is not None else rag_config.get("top_k", 5)
-    channel = getattr(args, "channel", None)
-
-    chunks = retrieve(args.query, indexer, top_k=top_k, channel_identifier=channel)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        print("Error: ANTHROPIC_API_KEY environment variable not set.")
+        return
+    chunks = db.search_fts_query(args.query, top_k=top_k)
     if not chunks:
-        console.print("[yellow]No matching content found in the index.[/yellow]")
+        print("No relevant content found in the library.")
         return
 
-    if getattr(args, "sources_only", False):
-        console.print("\n[bold]Sources:[/bold]")
-        seen: set[str] = set()
-        for chunk in chunks:
-            fn = chunk["filename"]
-            if fn not in seen:
-                seen.add(fn)
-                loc = f"p. {chunk['page']}" if chunk.get("page") is not None else (chunk.get("chapter") or "")
-                console.print(f"  . {fn:<45} {loc}")
-        return
-
-    console.print("\n[bold]Answer:[/bold]")
-    try:
-        async for token in generate(
-            args.query,
-            chunks,
-            rag_config.get("ollama_url", "http://localhost:11434"),
-            rag_config.get("ollama_model", "phi3:mini"),
-        ):
-            print(token, end="", flush=True)
-        print()
-    except OllamaUnavailableError as exc:
-        console.print(f"\n[red]Error:[/red] {exc}")
-
-    console.print("\n[bold]Sources:[/bold]")
-    seen: set[str] = set()
-    for chunk in chunks:
-        fn = chunk["filename"]
-        if fn not in seen:
-            seen.add(fn)
-            loc = f"p. {chunk['page']}" if chunk.get("page") is not None else (chunk.get("chapter") or "")
-            console.print(f"  . {fn:<45} {loc}")
+    from search.generator import generate
+    async for token in generate(args.query, chunks, api_key):
+        print(token, end="", flush=True)
+    print()
 
 
 async def cmd_scrape(
