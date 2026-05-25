@@ -68,9 +68,8 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 - **PyMuPDF** — PDF cover thumbnail extraction (webui) + text extraction for language detection (main app)
 - **Pillow** — image resizing for thumbnails
 - **langdetect** — language detection for automatic German-content filtering
-- **chromadb** — embedded vector store for the RAG index (HNSW, cosine similarity, no server process)
-- **sentence-transformers** — local embedding model `all-MiniLM-L6-v2` (~22MB, 384-dim, runs on CPU)
-- **httpx** — async HTTP client for Ollama API calls
+- **anthropic** — Claude API client for AI Q&A generation (Ask AI feature in web UI + CLI)
+- **httpx** — async HTTP client
 
 ### Entry points
 ```
@@ -97,14 +96,22 @@ uv run python main.py <command>
 | `webui/app.py` | FastAPI web UI — file grid with cover previews, discard, download |
 | `webui/static/index.html` | Single-page app (vanilla JS, all inline) |
 | `webui/Dockerfile` | Separate image for the web UI service |
+| `search/chunker.py` | Text extraction + chunking for PDF (per-page) and EPUB (per-chapter) |
+| `search/indexer.py` | FTS5 insert / delete / query / is_indexed helpers |
+| `search/generator.py` | Claude Haiku streaming generation via Anthropic API |
 
 ### Setup (Docker — recommended)
 1. Copy `config.yaml.example` → `config.yaml`; fill in `api_id`, `api_hash`
 2. `mkdir -p data/downloads`
-3. First-time Telegram auth (interactive — phone + OTP):
+3. Create `.env` in the project root with your Anthropic API key (required for Ask AI):
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+   The `.env` file is gitignored and read automatically by docker compose.
+4. First-time Telegram auth (interactive — phone + OTP):
    `sudo docker compose run --rm -it tg-downloader uv run python main.py listen`
    Session is saved to `data/tg_session.session` and reused on subsequent runs. Ctrl+C once authenticated.
-4. `sudo docker compose up -d --build` — builds image, starts listener as main process with `restart: always`
+5. `sudo docker compose up -d --build` — builds image, starts listener as main process with `restart: always`
 
 ### Usage (Docker)
 Use `tgdctl` — the host-side management wrapper:
@@ -125,8 +132,8 @@ uv run tgdctl unsubscribe @channel   # unsubscribe from a channel
 uv run tgdctl scan-languages         # retroactively detect language for untagged files; discard German ones
 uv run tgdctl scan-topics            # retroactively apply topic filters to downloaded files; discard matches
 uv run tgdctl scan-hashes            # compute SHA-256 for all downloaded files; enables duplicate detection in web UI
-uv run tgdctl index                  # index all downloaded files into the RAG vector store
-uv run tgdctl ask "query"            # ask a natural language question about your library
+uv run tgdctl index                  # index all downloaded files into the FTS5 search table
+uv run tgdctl ask "query"            # ask a natural language question about your library (streams via Claude API)
 uv run tgdctl ask "query" --sources-only  # show matching sources without AI generation
 ```
 Downloaded files appear in `./data/downloads/` on the host.
@@ -148,14 +155,17 @@ Features:
 - Duplicate detection: by default shows one copy per unique file (identified by SHA-256 hash, falling back to filename+size); cards show an "N×" amber badge when more copies exist. Toggle with the "Hide dupes / Show dupes" button.
 - Thumbnails are cached in `data/thumbs/` and generated on first request
 
-### RAG (Retrieval-Augmented Generation)
-Semantic search and AI Q&A over the downloaded library. Disabled by default; enable via `rag.enabled: true` in `config.yaml`.
+### Search and Ask AI
+Full-text search and AI Q&A over the downloaded library. Always enabled — zero startup cost.
 
-- Embeddings: `all-MiniLM-L6-v2` (sentence-transformers, local, ~22MB model)
-- Vector store: ChromaDB persisted to `data/rag_index/`
-- Generation: Ollama running on the Pi host (`http://host.docker.internal:11434`)
-- Auto-indexed after each download; re-run `tgdctl index` to index existing files
-- Only `pdf` and `epub` are indexed; other formats are skipped
+- Index: SQLite FTS5 virtual table (`search_fts`) inside `tg_downloader.db`; BM25-ranked, accent-insensitive (`unicode61 remove_diacritics 1`)
+- Chunking: one chunk per PDF page, one per EPUB chapter section; implemented in `search/chunker.py`
+- Generation: Claude Haiku via Anthropic API (`search/generator.py`); requires `ANTHROPIC_API_KEY` in `.env`
+- Auto-indexed after each download; run `tgdctl index` to index existing files retroactively
+- On `listen` startup, any `downloaded` file missing from `search_fts` is indexed in the background (startup heal)
+- Only `pdf` and `epub` are indexed; other formats are skipped silently
+- Web UI exposes `GET /api/search?q=` (FTS5) and `POST /api/ask` (Claude API streaming)
+- If `ANTHROPIC_API_KEY` is absent, `/api/search` still works; `/api/ask` returns HTTP 503
 
 ### Container behaviour
 - `restart: always` — containers restart automatically on crash or server reboot
