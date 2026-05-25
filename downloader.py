@@ -22,7 +22,6 @@ async def download_item(
     topic_keywords: dict | None = None,
     topic_min_matches: int = 2,
     topic_min_occurrences: int = 1,
-    indexer=None,
 ) -> bool:
     """Download one media item to dest. Returns True on success.
 
@@ -32,8 +31,7 @@ async def download_item(
     If message is provided (a live Telethon message object), it is used directly
     and no Telegram fetch is needed.
 
-    If indexer is provided (a rag.indexer.Indexer), the file is indexed after
-    a successful download via a background asyncio task.
+    The file is indexed via FTS5 after a successful download in a background asyncio task.
     """
     async with semaphore:
         filepath = unique_path(dest / item["filename"])
@@ -80,8 +78,14 @@ async def download_item(
             lang_tag = f" [{lang}]" if lang else ""
             log.info(f"[{label}] Downloaded: {item['filename']}  ({size_str}){lang_tag}")
 
-            if indexer is not None:
-                asyncio.create_task(_index_async(indexer, db, item, filepath))
+            asyncio.create_task(_index_async(
+                db,
+                item["id"],
+                str(filepath),
+                item.get("ext", ""),
+                item.get("filename", filepath.name),
+                item.get("channel_identifier", ""),
+            ))
 
             return True
         except Exception as exc:
@@ -89,22 +93,13 @@ async def download_item(
             return False
 
 
-async def _index_async(indexer, db: Database, item: dict, filepath: Path) -> None:
-    """Index a downloaded file in the background. Errors are logged, not raised."""
+async def _index_async(
+    db: Database, media_id: int, filepath: str, ext: str, filename: str, channel_identifier: str = ""
+) -> None:
+    """Index a downloaded file via FTS5 in the background. Errors are logged, not raised."""
+    from search.indexer import index_file
+
     try:
-        count = await asyncio.to_thread(
-            indexer.index_file,
-            item["id"],
-            filepath,
-            {
-                "filename": item["filename"],
-                "channel_title": item.get("channel_title", ""),
-                "channel_identifier": item.get("channel_identifier", ""),
-                "ext": item.get("ext", ""),
-            },
-        )
-        if count > 0:
-            db.mark_indexed(item["id"])
-            log.debug(f"RAG: indexed {item['filename']} ({count} chunks)")
+        await asyncio.to_thread(index_file, db, media_id, filepath, ext, filename, channel_identifier)
     except Exception as exc:
-        log.warning(f"RAG: indexing failed for {item['filename']!r}: {exc}")
+        log.warning(f"FTS5 indexing failed for {filename!r}: {exc}")
