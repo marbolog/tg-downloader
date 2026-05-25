@@ -17,7 +17,7 @@ def _build_messages(query: str, chunks: list[dict]) -> list[dict]:
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
         source = chunk.get("filename", "unknown")
-        if chunk.get("page"):
+        if chunk.get("page") is not None:
             source += f" (p. {chunk['page']})"
         elif chunk.get("chapter"):
             source += f" -- {chunk['chapter']}"
@@ -70,6 +70,7 @@ async def generate(
                     try:
                         data = json.loads(line)
                     except Exception:
+                        log.debug("Unparseable stream line: %r", line)
                         continue
                     token = data.get("message", {}).get("content", "")
                     if token:
