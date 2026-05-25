@@ -39,6 +39,7 @@ _MIGRATIONS = [
     "ALTER TABLE media_messages ADD COLUMN downloaded_at TEXT",
     "ALTER TABLE media_messages ADD COLUMN language TEXT",
     "ALTER TABLE media_messages ADD COLUMN file_hash TEXT",
+    "ALTER TABLE media_messages ADD COLUMN indexed_at TEXT",
 ]
 
 
@@ -199,6 +200,27 @@ class Database:
         with self._conn() as conn:
             conn.execute(
                 "UPDATE media_messages SET status='expired', local_path=NULL WHERE id=?",
+                (media_id,),
+            )
+
+    def get_unindexed_downloaded(self) -> list[dict]:
+        """Returns downloaded files with no indexed_at timestamp."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT m.*, c.title AS channel_title,
+                          c.telegram_id AS channel_telegram_id,
+                          c.identifier AS channel_identifier
+                   FROM media_messages m
+                   JOIN channels c ON m.channel_id = c.id
+                   WHERE m.status = 'downloaded' AND m.indexed_at IS NULL
+                   ORDER BY m.downloaded_at DESC, m.date DESC"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_indexed(self, media_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE media_messages SET indexed_at=datetime('now') WHERE id=?",
                 (media_id,),
             )
 
