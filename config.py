@@ -56,6 +56,7 @@ def _apply_rag_defaults(raw: dict) -> None:
     rag = raw.setdefault("rag", {})
     rag.setdefault("enabled", False)
     rag.setdefault("index_path", "data/rag_index")
+    rag["index_path"] = str(Path(rag["index_path"]).expanduser())
     rag.setdefault("embed_model", "all-MiniLM-L6-v2")
     rag.setdefault("ollama_url", "http://host.docker.internal:11434")
     rag.setdefault("ollama_model", "phi3:mini")

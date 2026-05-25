@@ -68,6 +68,9 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 - **PyMuPDF** — PDF cover thumbnail extraction (webui) + text extraction for language detection (main app)
 - **Pillow** — image resizing for thumbnails
 - **langdetect** — language detection for automatic German-content filtering
+- **chromadb** — embedded vector store for the RAG index (HNSW, cosine similarity, no server process)
+- **sentence-transformers** — local embedding model `all-MiniLM-L6-v2` (~22MB, 384-dim, runs on CPU)
+- **httpx** — async HTTP client for Ollama API calls
 
 ### Entry points
 ```
@@ -122,6 +125,9 @@ uv run tgdctl unsubscribe @channel   # unsubscribe from a channel
 uv run tgdctl scan-languages         # retroactively detect language for untagged files; discard German ones
 uv run tgdctl scan-topics            # retroactively apply topic filters to downloaded files; discard matches
 uv run tgdctl scan-hashes            # compute SHA-256 for all downloaded files; enables duplicate detection in web UI
+uv run tgdctl index                  # index all downloaded files into the RAG vector store
+uv run tgdctl ask "query"            # ask a natural language question about your library
+uv run tgdctl ask "query" --sources-only  # show matching sources without AI generation
 ```
 Downloaded files appear in `./data/downloads/` on the host.
 
@@ -141,6 +147,15 @@ Features:
 - Language badge on each card (ISO code chip, color-coded by language)
 - Duplicate detection: by default shows one copy per unique file (identified by SHA-256 hash, falling back to filename+size); cards show an "N×" amber badge when more copies exist. Toggle with the "Hide dupes / Show dupes" button.
 - Thumbnails are cached in `data/thumbs/` and generated on first request
+
+### RAG (Retrieval-Augmented Generation)
+Semantic search and AI Q&A over the downloaded library. Disabled by default; enable via `rag.enabled: true` in `config.yaml`.
+
+- Embeddings: `all-MiniLM-L6-v2` (sentence-transformers, local, ~22MB model)
+- Vector store: ChromaDB persisted to `data/rag_index/`
+- Generation: Ollama running on the Pi host (`http://host.docker.internal:11434`)
+- Auto-indexed after each download; re-run `tgdctl index` to index existing files
+- Only `pdf` and `epub` are indexed; other formats are skipped
 
 ### Container behaviour
 - `restart: always` — containers restart automatically on crash or server reboot
