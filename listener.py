@@ -23,14 +23,10 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     destination.mkdir(parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(concurrent_downloads)
 
-    rag_config = config.get("rag", {})
+    # Auto-indexing on download is disabled in the listener: loading sentence-transformers
+    # alongside Telethon inside a running asyncio event loop causes segfaults on ARM.
+    # Run `tgdctl index` separately to index downloaded files.
     indexer = None
-    if rag_config.get("enabled"):
-        try:
-            from rag.indexer import Indexer
-            indexer = Indexer(rag_config)
-        except Exception as exc:
-            log.error(f"RAG: failed to initialise indexer -- {exc}. Continuing without RAG.")
 
     await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
     await _heal_missing(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, indexer)
