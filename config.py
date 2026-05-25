@@ -48,3 +48,15 @@ def _apply_defaults(raw: dict) -> None:
     filters.setdefault("discard_topics", {})
     filters.setdefault("topic_min_matches", 2)
     filters.setdefault("topic_min_keyword_occurrences", 1)
+
+    _apply_rag_defaults(raw)
+
+
+def _apply_rag_defaults(raw: dict) -> None:
+    rag = raw.setdefault("rag", {})
+    rag.setdefault("enabled", False)
+    rag.setdefault("index_path", "data/rag_index")
+    rag.setdefault("embed_model", "all-MiniLM-L6-v2")
+    rag.setdefault("ollama_url", "http://host.docker.internal:11434")
+    rag.setdefault("ollama_model", "phi3:mini")
+    rag.setdefault("top_k", 5)

@@ -54,3 +54,14 @@ filters:
   #     - holster
   # topic_min_matches: 2
   # topic_min_keyword_occurrences: 2
+
+# Optional: RAG (Retrieval-Augmented Generation) -- semantic search + AI answers.
+# Requires Ollama running on the host: https://ollama.com/
+# After enabling, run 'tgdctl index' to index existing files.
+rag:
+  enabled: false                                     # set to true to activate
+  index_path: "data/rag_index"                       # ChromaDB storage (inside Docker volume)
+  embed_model: "all-MiniLM-L6-v2"                   # local embedding model (~22MB)
+  ollama_url: "http://host.docker.internal:11434"   # Pi host from inside Docker container
+  ollama_model: "phi3:mini"                          # any model installed in Ollama
+  top_k: 5                                           # chunks returned per query
