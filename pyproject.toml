@@ -30,4 +30,4 @@ package = true
 
 [tool.setuptools]
 py-modules = ["main", "config", "db", "lang_filter", "listener", "ui", "downloader", "utils", "tgdctl"]
-packages = ["rag"]
+packages = ["rag", "search"]
