@@ -159,9 +159,10 @@ Telethon writes a `tg_session.session` file after the first login. Subsequent ru
 ### Download flow
 On each `listen` startup the listener:
 1. **Flushes pending** — downloads any DB records that are still `pending` (e.g. from a prior `scrape` or a crashed session).
-2. **Backfills gaps** — for each channel, finds the highest recorded `message_id` and fetches everything newer from Telegram, then downloads it. Only runs if at least one message was previously recorded for that channel (no reference point = skip; use `scrape` for initial history).
-3. **Real-time** — downloads new messages immediately as they arrive via `asyncio.create_task`.
-4. **Retention cleanup** — runs once on startup then every hour; deletes files older than `download.retention_days` days (set to 0 to disable).
+2. **Heals missing** — re-downloads any files marked `downloaded` in the DB whose file is no longer on disk (manually deleted, disk replaced, etc.). The retention clock resets on re-download.
+3. **Backfills gaps** — for each channel, finds the highest recorded `message_id` and fetches everything newer from Telegram, then downloads it. Only runs if at least one message was previously recorded for that channel (no reference point = skip; use `scrape` for initial history).
+4. **Real-time** — downloads new messages immediately as they arrive via `asyncio.create_task`.
+5. **Retention cleanup** — runs once on startup then every hour; deletes files older than `download.retention_days` days (set to 0 to disable). Default is 365 days.
 
 Concurrency is controlled by `download.concurrent_downloads` in `config.yaml` (default: 1). The listener constructs the `asyncio.Semaphore` from this value and passes it into `download_item`. Raise to 3 on faster connections; keep at 1 on Raspberry Pi — each concurrent download runs Telethon's MTProto crypto in software AES, which pegs ARM cores and spins the fan under sustained backfill load. The SHA-256 hash step runs via `asyncio.to_thread` so disk I/O doesn't block the event loop when concurrency > 1.
 

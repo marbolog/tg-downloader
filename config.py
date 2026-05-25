@@ -39,7 +39,7 @@ def _apply_defaults(raw: dict) -> None:
     dl = raw.setdefault("download", {})
     dl.setdefault("destination", "data/downloads")
     dl["destination"] = str(Path(dl["destination"]).expanduser())
-    dl.setdefault("retention_days", 30)
+    dl.setdefault("retention_days", 365)
     dl.setdefault("concurrent_downloads", 1)
 
     filters = raw.setdefault("filters", {})

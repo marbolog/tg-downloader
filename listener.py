@@ -26,6 +26,9 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     # Download any items that were recorded but not yet downloaded in a previous session.
     await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
 
+    # Re-download files that are marked 'downloaded' in the DB but missing from disk.
+    await _heal_missing(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
+
     # Fetch and download messages that arrived while the service was down.
     await _backfill_missed(client, db, allowed, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
 
@@ -72,6 +75,36 @@ async def _flush_pending(
     )
     ok = sum(1 for r in results if r is True)
     log.info(f"Flush complete: {ok}/{len(pending)} succeeded")
+
+
+async def _heal_missing(
+    client: TelegramClient,
+    db: Database,
+    dest: Path,
+    semaphore: asyncio.Semaphore,
+    topic_keywords: dict,
+    topic_min_matches: int,
+    topic_min_occurrences: int,
+) -> None:
+    """Re-download files marked 'downloaded' in the DB but absent from disk."""
+    downloaded = db.get_downloaded_media()
+    missing = [
+        item for item in downloaded
+        if not item.get("local_path") or not Path(item["local_path"]).exists()
+    ]
+    if not missing:
+        return
+    log.info(f"Healing {len(missing)} file(s) present in DB but missing from disk...")
+    results = await asyncio.gather(
+        *[download_item(client, db, item, dest, semaphore,
+                        topic_keywords=topic_keywords,
+                        topic_min_matches=topic_min_matches,
+                        topic_min_occurrences=topic_min_occurrences)
+          for item in missing],
+        return_exceptions=True,
+    )
+    ok = sum(1 for r in results if r is True)
+    log.info(f"Heal complete: {ok}/{len(missing)} restored")
 
 
 async def _backfill_missed(
