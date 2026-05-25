@@ -5,7 +5,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
-COPY rag/ ./rag/
+COPY search/ ./search/
 COPY webui/app.py ./
 COPY webui/static/ ./static/
 
