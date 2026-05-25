@@ -11,7 +11,9 @@ services:
     tty: true
 
   webui:
-    build: ./webui
+    build:
+      context: .
+      dockerfile: webui/Dockerfile
     container_name: tg-webui
     restart: always
     ports:

@@ -15,6 +15,29 @@ log = logging.getLogger(__name__)
 DB_PATH = Path(os.environ.get("DB_PATH", "/app/data/tg_downloader.db"))
 THUMBS_DIR = Path(os.environ.get("THUMBS_DIR", "/app/data/thumbs"))
 
+RAG_INDEX_PATH = os.environ.get("RAG_INDEX_PATH", "/app/data/rag_index")
+RAG_EMBED_MODEL = os.environ.get("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
+RAG_OLLAMA_URL = os.environ.get("RAG_OLLAMA_URL", "http://host.docker.internal:11434")
+RAG_OLLAMA_MODEL = os.environ.get("RAG_OLLAMA_MODEL", "phi3:mini")
+RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
+
+_rag_indexer = None
+
+
+def _get_indexer():
+    global _rag_indexer
+    if _rag_indexer is None:
+        try:
+            from rag.indexer import Indexer
+            _rag_indexer = Indexer({
+                "index_path": RAG_INDEX_PATH,
+                "embed_model": RAG_EMBED_MODEL,
+            })
+        except Exception as exc:
+            log.warning(f"RAG indexer unavailable: {exc}")
+    return _rag_indexer
+
+
 app = FastAPI()
 
 
@@ -248,6 +271,43 @@ def download_file(file_id: int):
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{row["filename"]}"'},
     )
+
+
+@app.get("/api/rag/search")
+def rag_search(q: str, channel: str = "", top_k: int = 0):
+    from rag.retriever import retrieve
+    indexer = _get_indexer()
+    if indexer is None:
+        return {"chunks": [], "error": "RAG index not available"}
+    k = top_k or RAG_TOP_K
+    chunks = retrieve(q, indexer, top_k=k, channel_identifier=channel or None)
+    return {"chunks": chunks}
+
+
+class _AskRequest(BaseModel):
+    query: str
+    channel: str = ""
+    top_k: int = 0
+
+
+@app.post("/api/rag/ask")
+async def rag_ask(req: _AskRequest):
+    from rag.retriever import retrieve
+    from rag.generator import generate, OllamaUnavailableError
+    indexer = _get_indexer()
+    if indexer is None:
+        raise HTTPException(status_code=503, detail="RAG index not available")
+    k = req.top_k or RAG_TOP_K
+    chunks = retrieve(req.query, indexer, top_k=k, channel_identifier=req.channel or None)
+    if not chunks:
+        return {"answer": "No relevant content found in the library.", "chunks": []}
+    try:
+        tokens = []
+        async for token in generate(req.query, chunks, RAG_OLLAMA_URL, RAG_OLLAMA_MODEL):
+            tokens.append(token)
+        return {"answer": "".join(tokens), "chunks": chunks}
+    except OllamaUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
