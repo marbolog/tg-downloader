@@ -271,6 +271,7 @@ app commands (proxied into the running container):
   scrape [--channel X] [--limit N] [--since DATE]  Backfill media from history (pauses listener briefly)
   scan-languages              Detect language for untagged files; discard German ones
   scan-topics                 Apply topic filters from config to downloaded files; discard matches
+  scan-hashes                 Compute SHA-256 hashes for files; enables duplicate detection in web UI
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -301,6 +302,7 @@ app commands (proxied into the running container):
 
     sub.add_parser("scan-languages")
     sub.add_parser("scan-topics")
+    sub.add_parser("scan-hashes")
 
     args = parser.parse_args()
 
@@ -342,6 +344,8 @@ app commands (proxied into the running container):
         sys.exit(app("scan-languages"))
     elif args.command == "scan-topics":
         sys.exit(app("scan-topics"))
+    elif args.command == "scan-hashes":
+        sys.exit(app("scan-hashes"))
 
 
 if __name__ == "__main__":

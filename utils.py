@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 
@@ -7,6 +8,15 @@ def human_size(n_bytes: int) -> str:
             return f"{n_bytes:.1f} {unit}"
         n_bytes /= 1024
     return f"{n_bytes:.1f} TB"
+
+
+def compute_sha256(path: Path) -> str:
+    """Return hex SHA-256 digest of the file, reading in 64 KB chunks."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def unique_path(path: Path) -> Path:

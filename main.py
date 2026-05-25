@@ -94,6 +94,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("scan-topics", help="Retroactively apply topic filters from config to already-downloaded files; auto-discard matches")
 
+    sub.add_parser("scan-hashes", help="Compute SHA-256 for downloaded files without a hash (enables duplicate detection)")
+
     return parser
 
 
@@ -119,6 +121,9 @@ async def run(args) -> None:
         return
     if args.command == "scan-topics":
         cmd_scan_topics(db, config)
+        return
+    if args.command == "scan-hashes":
+        cmd_scan_hashes(db)
         return
     if args.command == "discard":
         from ui import select_discard
@@ -170,6 +175,15 @@ async def cmd_subscribe(client: TelegramClient, db: Database, identifier: str) -
     title = getattr(entity, "title", identifier)
     db.add_channel(entity.id, identifier, title)
     console.print(f"[green]Subscribed:[/green] {title}  (id={entity.id})")
+
+    if getattr(entity, "left", False):
+        console.print(
+            f"[yellow]Warning:[/yellow] your Telegram account is not a member of {title!r}. "
+            f"Real-time message updates will not be received until you join in the Telegram app."
+        )
+    console.print(
+        f"[dim]Tip:[/dim] run 'scrape --channel {identifier}' to download existing content from this channel."
+    )
 
 
 def cmd_unsubscribe(db: Database, identifier: str) -> None:
@@ -395,6 +409,77 @@ def cmd_scan_topics(db: Database, config: dict) -> None:
     )
 
 
+def cmd_scan_hashes(db: Database) -> None:
+    from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+    from utils import compute_sha256
+
+    items = db.get_untagged_for_hash()
+    if not items:
+        console.print("[green]All downloaded files already have a hash.[/green]")
+        return
+
+    console.print(f"[dim]Hashing {len(items)} file(s)…[/dim]")
+    hashed = 0
+    missing = 0
+    errors = 0
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Computing SHA-256", total=len(items))
+        for item in items:
+            path = Path(item["local_path"])
+            if not path.exists():
+                missing += 1
+                progress.advance(task)
+                continue
+            try:
+                h = compute_sha256(path)
+                db.set_file_hash(item["id"], h)
+                hashed += 1
+            except Exception as exc:
+                log.warning(f"Hash failed for {item['filename']!r}: {exc}")
+                errors += 1
+            progress.advance(task)
+
+    console.print(
+        f"\n[green]Done.[/green] {hashed} file(s) hashed, {missing} missing on disk"
+        + (f", {errors} errors" if errors else "") + "."
+    )
+
+    # Show duplicate groups found
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect("data/tg_downloader.db")
+    conn.row_factory = _sqlite3.Row
+    try:
+        dupes = conn.execute("""
+            SELECT file_hash, COUNT(*) AS copies, MIN(filename) AS example
+            FROM media_messages
+            WHERE status = 'downloaded' AND file_hash IS NOT NULL
+            GROUP BY file_hash
+            HAVING copies > 1
+            ORDER BY copies DESC
+        """).fetchall()
+    finally:
+        conn.close()
+
+    if dupes:
+        table = Table(title=f"Duplicate Groups ({len(dupes)} found)")
+        table.add_column("Copies", justify="right", style="yellow")
+        table.add_column("Example filename")
+        for row in dupes[:20]:
+            table.add_row(str(row["copies"]), row["example"])
+        if len(dupes) > 20:
+            table.add_row("…", f"…and {len(dupes) - 20} more groups")
+        console.print(table)
+    else:
+        console.print("[green]No duplicate files found.[/green]")
+
+
 async def cmd_scrape(
     client: TelegramClient,
     db: Database,
@@ -423,9 +508,14 @@ async def cmd_scrape(
     for ch in channels:
         label = f"since {since}" if since_dt else f"up to {limit} messages" if limit else "all history"
         console.print(f"[dim]Scanning {ch['title']} ({label})…[/dim]")
+        try:
+            entity = await client.get_entity(ch["identifier"])
+        except Exception as exc:
+            console.print(f"[red]Cannot resolve {ch['identifier']!r}: {exc} — skipping[/red]")
+            continue
         count = 0
         scanned = 0
-        async for message in client.iter_messages(ch["telegram_id"], limit=limit):
+        async for message in client.iter_messages(entity, limit=limit):
             if since_dt and message.date < since_dt:
                 break
             scanned += 1

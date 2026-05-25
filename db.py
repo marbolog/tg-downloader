@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS media_messages (
 _MIGRATIONS = [
     "ALTER TABLE media_messages ADD COLUMN downloaded_at TEXT",
     "ALTER TABLE media_messages ADD COLUMN language TEXT",
+    "ALTER TABLE media_messages ADD COLUMN file_hash TEXT",
 ]
 
 
@@ -174,11 +175,11 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def mark_downloaded(self, media_id: int, local_path: str, language: str | None = None) -> None:
+    def mark_downloaded(self, media_id: int, local_path: str, language: str | None = None, file_hash: str | None = None) -> None:
         with self._conn() as conn:
             conn.execute(
-                "UPDATE media_messages SET status='downloaded', local_path=?, downloaded_at=datetime('now'), language=? WHERE id=?",
-                (local_path, language, media_id),
+                "UPDATE media_messages SET status='downloaded', local_path=?, downloaded_at=datetime('now'), language=?, file_hash=? WHERE id=?",
+                (local_path, language, file_hash, media_id),
             )
 
     def mark_skipped(self, media_id: int) -> None:
@@ -235,6 +236,23 @@ class Database:
     def set_language(self, media_id: int, language: str | None) -> None:
         with self._conn() as conn:
             conn.execute("UPDATE media_messages SET language=? WHERE id=?", (language, media_id))
+
+    def get_untagged_for_hash(self) -> list[dict]:
+        """Returns downloaded files with no file_hash and a valid local_path."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT m.*, c.identifier AS channel_identifier
+                   FROM media_messages m
+                   JOIN channels c ON m.channel_id = c.id
+                   WHERE m.status = 'downloaded' AND m.file_hash IS NULL
+                     AND m.local_path IS NOT NULL
+                   ORDER BY m.downloaded_at DESC"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def set_file_hash(self, media_id: int, file_hash: str) -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE media_messages SET file_hash=? WHERE id=?", (file_hash, media_id))
 
     def get_download_history(self, limit: int = 20) -> list[dict]:
         """Returns the most recently downloaded items, newest first."""

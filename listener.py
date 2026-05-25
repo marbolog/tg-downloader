@@ -87,8 +87,10 @@ async def _backfill_missed(
     for ch in db.list_channels():
         max_id = db.get_max_message_id(ch["id"])
         if max_id is None:
-            # No prior messages recorded — no reference point for gap detection.
-            # Use the scrape command to do an initial history pull.
+            log.warning(
+                f"Backfill: no prior messages recorded for {ch['title']!r} — "
+                f"run 'scrape --channel {ch['identifier']}' to pull existing history"
+            )
             continue
 
         try:

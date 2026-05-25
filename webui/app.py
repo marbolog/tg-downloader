@@ -43,7 +43,7 @@ def list_languages():
 
 
 @app.get("/api/files")
-def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: str = ""):
+def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: str = "", hide_dupes: bool = True):
     offset = (page - 1) * per_page
     conn = _db()
     try:
@@ -58,27 +58,56 @@ def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: s
             where += " AND m.language = ?"
             params.append(language)
 
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM media_messages m JOIN channels c ON m.channel_id = c.id WHERE {where}",
-            params,
-        ).fetchone()[0]
-
         rows = conn.execute(
             f"""
             SELECT m.id, m.filename, m.size, m.ext, m.date, m.downloaded_at,
-                   m.local_path, c.title AS channel_title, c.identifier AS channel_identifier
+                   m.local_path, m.language, m.file_hash,
+                   c.title AS channel_title, c.identifier AS channel_identifier
             FROM media_messages m
             JOIN channels c ON m.channel_id = c.id
             WHERE {where}
             ORDER BY m.downloaded_at DESC NULLS LAST, m.date DESC
-            LIMIT ? OFFSET ?
             """,
-            params + [per_page, offset],
+            params,
         ).fetchall()
+        all_items = [dict(r) for r in rows]
 
-        return {"total": total, "page": page, "per_page": per_page, "items": [dict(r) for r in rows]}
+        if hide_dupes:
+            all_items = _deduplicate_with_counts(all_items)
+        else:
+            for item in all_items:
+                item["copy_count"] = 1
+
+        total = len(all_items)
+        return {"total": total, "page": page, "per_page": per_page, "items": all_items[offset:offset + per_page]}
     finally:
         conn.close()
+
+
+def _deduplicate_with_counts(items: list[dict]) -> list[dict]:
+    """Keep the first-downloaded copy per unique hash (or filename+size fallback).
+
+    Items arrive sorted newest-first; we scan once to find group members, then
+    filter to keep only the representative (lowest id = oldest download) while
+    annotating each with copy_count.
+    """
+    groups: dict[str, list[int]] = {}
+    id_to_key: dict[int, str] = {}
+    for item in items:
+        # Prefer hash when available; fall back to filename|size for unhashed files.
+        key = item.get("file_hash") or f"\x00{item['filename']}\x00{item['size']}"
+        groups.setdefault(key, []).append(item["id"])
+        id_to_key[item["id"]] = key
+
+    rep_ids = {min(ids) for ids in groups.values()}
+    key_counts = {k: len(v) for k, v in groups.items()}
+
+    result = []
+    for item in items:
+        if item["id"] in rep_ids:
+            item["copy_count"] = key_counts[id_to_key[item["id"]]]
+            result.append(item)
+    return result
 
 
 @app.get("/api/channels")

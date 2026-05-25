@@ -121,6 +121,7 @@ uv run tgdctl history [--limit N]    # show recently downloaded files
 uv run tgdctl unsubscribe @channel   # unsubscribe from a channel
 uv run tgdctl scan-languages         # retroactively detect language for untagged files; discard German ones
 uv run tgdctl scan-topics            # retroactively apply topic filters to downloaded files; discard matches
+uv run tgdctl scan-hashes            # compute SHA-256 for all downloaded files; enables duplicate detection in web UI
 ```
 Downloaded files appear in `./data/downloads/` on the host.
 
@@ -138,6 +139,7 @@ Features:
 - Per-card Download button — downloads the file to the browser
 - Filter by channel and by language; pagination (60 per page)
 - Language badge on each card (ISO code chip, color-coded by language)
+- Duplicate detection: by default shows one copy per unique file (identified by SHA-256 hash, falling back to filename+size); cards show an "N×" amber badge when more copies exist. Toggle with the "Hide dupes / Show dupes" button.
 - Thumbnails are cached in `data/thumbs/` and generated on first request
 
 ### Container behaviour
@@ -203,12 +205,13 @@ The detected language is stored in `media_messages.language` (ISO 639-1 code, nu
 |---|---|
 | `pending` | Recorded but not yet downloaded (should be 0 after startup flush) |
 | `downloaded` | File is on disk |
-| `discarded` | Deleted — either by user via `discard` command or automatically by the language filter |
+| `discarded` | Deleted — by user via `discard`, by language/topic filter, or because the Telegram message was deleted before download completed |
 | `expired` | Auto-deleted by retention cleanup |
 | `skipped` | Legacy — dismissed without downloading in the old manual workflow |
 
 ### Known constraints
-- Can only watch channels the authenticated user is a member of.
-- Backfill only covers the gap since the last recorded message — it does not fetch all history. Use `scrape` for a full initial history pull.
+- Can only watch channels the authenticated user is a member of. The `subscribe` command adds the channel to the DB but does not join it; use the Telegram app to join first.
+- Backfill only covers the gap since the last recorded message — it does not fetch all history. Use `scrape` for a full initial history pull. At startup, `listen` logs a `WARNING` for every channel with no recorded messages, naming the exact `scrape` command to run.
 - Photos from Telegram are always downloaded as JPEGs regardless of original format.
 - Files without a `downloaded_at` timestamp (downloaded before this field was added) are not subject to automatic retention cleanup.
+- If a Telegram message is deleted before its download completes, `download_item` marks the DB record as `discarded` (rather than leaving it `pending` forever) and logs a warning.

@@ -6,7 +6,7 @@ from telethon import TelegramClient
 
 from db import Database
 from lang_filter import DISCARD_LANG, analyze_file
-from utils import human_size, unique_path
+from utils import compute_sha256, human_size, unique_path
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,12 @@ async def download_item(
                 entity = await client.get_entity(identifier)
                 message = await client.get_messages(entity, ids=item["message_id"])
                 if message is None:
-                    raise ValueError("Message not found — may have been deleted from Telegram")
+                    db.mark_discarded(item["id"])
+                    log.warning(
+                        f"[{label}] Message {item['message_id']} not found on Telegram "
+                        f"(deleted?) — {item['filename']!r} marked discarded"
+                    )
+                    return True
 
             await client.download_media(message, file=str(filepath))
 
@@ -62,7 +67,13 @@ async def download_item(
                 log.info(f"[{label}] Auto-discarded (topic: {topic}): {item['filename']}")
                 return True
 
-            db.mark_downloaded(item["id"], str(filepath), language=lang)
+            file_hash = None
+            try:
+                file_hash = compute_sha256(filepath)
+            except Exception as exc:
+                log.warning(f"[{label}] Hash failed for {item['filename']!r}: {exc}")
+
+            db.mark_downloaded(item["id"], str(filepath), language=lang, file_hash=file_hash)
             size_str = human_size(filepath.stat().st_size) if filepath.exists() else "?"
             lang_tag = f" [{lang}]" if lang else ""
             log.info(f"[{label}] Downloaded: {item['filename']}  ({size_str}){lang_tag}")

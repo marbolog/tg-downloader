@@ -199,6 +199,13 @@ body {
 .btn-dl:hover { background: #e2e8f0; }
 .btn-dl:active { opacity: .7; }
 
+.dupe-badge {
+  display: inline-block; padding: 1px 5px; border-radius: 3px;
+  font-size: .6rem; font-weight: 700; letter-spacing: .03em;
+  background: #fef3c7; color: #92400e;
+}
+.btn.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+
 /* ── Pagination ── */
 .pagination {
   display: flex; align-items: center; justify-content: center;
@@ -235,6 +242,7 @@ body {
   <select id="ch-filter" title="Filter by channel" style="flex:1.5"></select>
   <select id="lang-filter" title="Filter by language" style="flex:1"></select>
   <div class="header-actions">
+    <button id="btn-dupes" class="btn active" onclick="toggleDupes()" title="Toggle duplicate copies">Hide dupes</button>
     <button class="btn" onclick="selectAll()">Select All</button>
     <button class="btn" onclick="clearAll()">Clear</button>
     <span id="sel-badge" class="sel-badge"></span>
@@ -263,7 +271,7 @@ body {
 
 <script>
 /* ── State ── */
-const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', language: '', selected: new Set() };
+const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', language: '', hideDupes: true, selected: new Set() };
 
 const LANG_NAMES = {
   af:'Afrikaans', ar:'Arabic', bg:'Bulgarian', ca:'Catalan', cs:'Czech',
@@ -317,10 +325,20 @@ async function init() {
   await load();
 }
 
+/* ── Dupes toggle ── */
+function toggleDupes() {
+  S.hideDupes = !S.hideDupes;
+  S.page = 1; S.selected.clear();
+  const btn = document.getElementById('btn-dupes');
+  btn.textContent = S.hideDupes ? 'Hide dupes' : 'Show dupes';
+  btn.classList.toggle('active', S.hideDupes);
+  load();
+}
+
 /* ── Data ── */
 async function load() {
   document.getElementById('grid').innerHTML = '<div class="loading-msg"><h2>Loading…</h2></div>';
-  const qs = new URLSearchParams({ page: S.page, per_page: S.perPage, channel: S.channel, language: S.language });
+  const qs = new URLSearchParams({ page: S.page, per_page: S.perPage, channel: S.channel, language: S.language, hide_dupes: S.hideDupes });
   try {
     const d = await fetch(`/api/files?${qs}`).then(r => r.json());
     S.files = d.items; S.total = d.total;
@@ -374,12 +392,22 @@ function makeCard(f) {
   const meta = document.createElement('div'); meta.className = 'info-meta'; meta.textContent = size + (date ? ' · ' + date : '');
   const dl   = document.createElement('a');   dl.className   = 'btn-dl'; dl.href = `/api/download/${f.id}`; dl.textContent = '⬇ Download'; dl.download = ''; dl.addEventListener('click', e => e.stopPropagation());
   info.appendChild(name); info.appendChild(chan);
+  const badges = document.createElement('div');
+  badges.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;margin-top:2px;';
   if (lang) {
     const badge = document.createElement('span');
     badge.className = 'lang-badge'; badge.dataset.lang = lang;
     badge.title = langLabel; badge.textContent = lang.toUpperCase();
-    info.appendChild(badge);
+    badges.appendChild(badge);
   }
+  if ((f.copy_count || 1) > 1) {
+    const dupeBadge = document.createElement('span');
+    dupeBadge.className = 'dupe-badge';
+    dupeBadge.title = `${f.copy_count} copies across channels`;
+    dupeBadge.textContent = `${f.copy_count}×`;
+    badges.appendChild(dupeBadge);
+  }
+  if (badges.firstChild) info.appendChild(badges);
   info.appendChild(meta); info.appendChild(dl);
 
   card.appendChild(cover); card.appendChild(info);
