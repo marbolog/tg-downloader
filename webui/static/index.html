@@ -404,9 +404,8 @@ async function ragSearch() {
   const el = document.getElementById('rag-results');
   _ragStatus(el, 'Searching...');
   try {
-    const ch = encodeURIComponent(S.channel || '');
     const data = await fetch(
-      '/api/rag/search?q=' + encodeURIComponent(q) + '&channel=' + ch
+      '/api/rag/search?' + new URLSearchParams({ q, channel: S.channel || '' })
     ).then(r => r.json());
     _renderRagResults(data.chunks || [], el, null);
   } catch {
@@ -641,9 +640,6 @@ function fmtSize(b) {
   if (!b) return '';
   const u = ['B','KB','MB','GB'], i = Math.min(Math.floor(Math.log(b) / Math.log(1024)), 3);
   return (b / 1024**i).toFixed(i ? 1 : 0) + ' ' + u[i];
-}
-function esc(s) {
-  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 const EXT_ICON = {
   pdf:'📄', epub:'📚', mobi:'📚', azw:'📚', azw3:'📚', fb2:'📚', djvu:'📖', djv:'📖',
