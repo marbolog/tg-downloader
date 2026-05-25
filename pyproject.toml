@@ -5,7 +5,9 @@ description = "Scrape Telegram channels for media files and interactively select
 requires-python = ">=3.11"
 dependencies = [
     "chromadb>=0.6",
+    "fastapi>=0.115",
     "httpx>=0.27",
+    "pillow>=10.0",
     "inquirerpy>=0.3.4",
     "langdetect>=1.0.9",
     "pymupdf>=1.25",
@@ -13,6 +15,7 @@ dependencies = [
     "rich>=15.0.0",
     "sentence-transformers>=3.0",
     "telethon>=1.43.2",
+    "uvicorn>=0.29",
 ]
 
 [dependency-groups]
