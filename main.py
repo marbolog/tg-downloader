@@ -96,6 +96,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("scan-hashes", help="Compute SHA-256 for downloaded files without a hash (enables duplicate detection)")
 
+    sub.add_parser("index", help="Index downloaded files into the RAG vector store")
+
+    p = sub.add_parser("ask", help="Query the RAG index with a natural language question")
+    p.add_argument("query", help="Natural language question")
+    p.add_argument("--sources-only", action="store_true",
+                   help="Show matching sources only, skip AI generation")
+    p.add_argument("--top-k", type=int, default=None, metavar="N",
+                   help="Number of chunks to retrieve (default: from config)")
+    p.add_argument("--channel", metavar="IDENTIFIER", default=None,
+                   help="Restrict search to one channel")
+
     return parser
 
 
@@ -124,6 +135,12 @@ async def run(args) -> None:
         return
     if args.command == "scan-hashes":
         cmd_scan_hashes(db)
+        return
+    if args.command == "index":
+        await cmd_index(db, config)
+        return
+    if args.command == "ask":
+        await cmd_ask(db, config, args)
         return
     if args.command == "discard":
         from ui import select_discard
@@ -478,6 +495,119 @@ def cmd_scan_hashes(db: Database) -> None:
         console.print(table)
     else:
         console.print("[green]No duplicate files found.[/green]")
+
+
+async def cmd_index(db: Database, config: dict) -> None:
+    from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+
+    rag_config = config.get("rag", {})
+    if not rag_config.get("enabled"):
+        console.print("[yellow]RAG not enabled -- set rag.enabled: true in config.yaml[/yellow]")
+        return
+
+    items = db.get_unindexed_downloaded()
+    if not items:
+        console.print("[green]All downloaded files are already indexed.[/green]")
+        return
+
+    from rag.indexer import Indexer
+    indexer = Indexer(rag_config)
+
+    _SUPPORTED = {"pdf", "epub"}
+    indexed = skipped = errors = 0
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task(f"Indexing {len(items)} file(s)", total=len(items))
+        for item in items:
+            ext = (item.get("ext") or "").lower()
+            local_path = item.get("local_path")
+            if ext not in _SUPPORTED or not local_path or not Path(local_path).exists():
+                skipped += 1
+                progress.advance(task)
+                continue
+            progress.update(task, description=item["filename"][:45])
+            try:
+                count = await asyncio.to_thread(
+                    indexer.index_file,
+                    item["id"],
+                    Path(local_path),
+                    {
+                        "filename": item["filename"],
+                        "channel_title": item.get("channel_title", ""),
+                        "channel_identifier": item.get("channel_identifier", ""),
+                        "ext": ext,
+                    },
+                )
+                if count > 0:
+                    db.mark_indexed(item["id"])
+                    indexed += 1
+                else:
+                    skipped += 1
+            except Exception as exc:
+                log.warning(f"Index failed for {item['filename']!r}: {exc}")
+                errors += 1
+            progress.advance(task)
+
+    console.print(
+        f"\n[green]Done.[/green] {indexed} indexed, "
+        f"{skipped} skipped (unsupported/missing), "
+        + (f"[red]{errors} errors[/red]." if errors else "0 errors.")
+    )
+
+
+async def cmd_ask(db: Database, config: dict, args) -> None:
+    rag_config = config.get("rag", {})
+    if not rag_config.get("enabled"):
+        console.print("[yellow]RAG not enabled -- set rag.enabled: true in config.yaml[/yellow]")
+        return
+
+    from rag.indexer import Indexer
+    from rag.retriever import retrieve
+    from rag.generator import generate, OllamaUnavailableError
+
+    indexer = Indexer(rag_config)
+    top_k = args.top_k or rag_config.get("top_k", 5)
+    channel = getattr(args, "channel", None)
+
+    chunks = retrieve(args.query, indexer, top_k=top_k, channel_identifier=channel)
+    if not chunks:
+        console.print("[yellow]No matching content found in the index.[/yellow]")
+        return
+
+    if getattr(args, "sources_only", False):
+        console.print("\n[bold]Sources:[/bold]")
+        for chunk in chunks:
+            loc = f"p. {chunk['page']}" if chunk.get("page") is not None else (chunk.get("chapter") or "")
+            console.print(f"  . {chunk['filename']:<45} {loc}")
+        return
+
+    console.print("\n[bold]Answer:[/bold]")
+    try:
+        async for token in generate(
+            args.query,
+            chunks,
+            rag_config.get("ollama_url", "http://localhost:11434"),
+            rag_config.get("ollama_model", "phi3:mini"),
+        ):
+            print(token, end="", flush=True)
+        print()
+    except OllamaUnavailableError as exc:
+        console.print(f"\n[red]Error:[/red] {exc}")
+
+    console.print("\n[bold]Sources:[/bold]")
+    seen: set[str] = set()
+    for chunk in chunks:
+        fn = chunk["filename"]
+        if fn not in seen:
+            seen.add(fn)
+            loc = f"p. {chunk['page']}" if chunk.get("page") is not None else (chunk.get("chapter") or "")
+            console.print(f"  . {fn:<45} {loc}")
 
 
 async def cmd_scrape(
