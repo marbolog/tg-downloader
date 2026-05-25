@@ -233,6 +233,39 @@ body {
   /* push toast above the mobile action bar */
   .toast { bottom: 80px; }
 }
+
+/* RAG search panel */
+.rag-panel {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+}
+.rag-bar { display: flex; gap: 8px; align-items: center; }
+.rag-input {
+  flex: 1; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+  font-size: .875rem; font-family: inherit; background: var(--bg);
+}
+.rag-input:focus { outline: none; border-color: var(--accent); }
+.rag-results { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.rag-chunk {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px;
+}
+.rag-chunk-source {
+  font-size: .73rem; font-weight: 600; color: var(--accent);
+  margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rag-chunk-text {
+  font-size: .8rem; color: var(--text); line-height: 1.5;
+  max-height: 72px; overflow: hidden;
+}
+.rag-answer {
+  background: var(--accent-light); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 12px 14px;
+}
+.rag-answer-label { font-size: .73rem; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
+.rag-answer-text { font-size: .85rem; color: var(--text); line-height: 1.6; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -249,6 +282,18 @@ body {
     <button id="btn-del" class="btn btn-danger" onclick="deleteSelected()" disabled>Delete Selected</button>
   </div>
 </header>
+
+<div class="rag-panel">
+  <div class="rag-bar">
+    <input id="rag-input" type="search" class="rag-input"
+           placeholder="Search your library..."
+           autocomplete="off"
+           onkeydown="if(event.key==='Enter')ragSearch()">
+    <button class="btn" onclick="ragSearch()">Search</button>
+    <button class="btn btn-primary" onclick="ragAsk()">Ask AI</button>
+  </div>
+  <div id="rag-results" class="rag-results" style="display:none"></div>
+</div>
 
 <!-- mobile bottom bar, shown only when items are selected -->
 <div id="mob-bar" class="mob-bar">
@@ -296,6 +341,95 @@ const thumbObs = new IntersectionObserver(entries => {
     thumbObs.unobserve(img);
   }
 }, { rootMargin: '400px' });
+
+/* -- RAG search/ask -- */
+function _ragStatus(el, msg) {
+  el.style.display = 'block';
+  const p = document.createElement('p');
+  p.style.cssText = 'color:var(--muted);font-size:.85rem;padding:4px 0';
+  p.textContent = msg;
+  el.replaceChildren(p);
+}
+
+function _ragError(el, msg) {
+  el.style.display = 'block';
+  const p = document.createElement('p');
+  p.style.cssText = 'color:var(--danger);font-size:.85rem';
+  p.textContent = msg;
+  el.replaceChildren(p);
+}
+
+function _renderRagResults(chunks, container, answer) {
+  container.replaceChildren();
+  container.style.display = 'block';
+  if (answer) {
+    const box = document.createElement('div');
+    box.className = 'rag-answer';
+    const lbl = document.createElement('div');
+    lbl.className = 'rag-answer-label';
+    lbl.textContent = 'Answer';
+    const txt = document.createElement('div');
+    txt.className = 'rag-answer-text';
+    txt.textContent = answer;
+    box.appendChild(lbl);
+    box.appendChild(txt);
+    container.appendChild(box);
+  }
+  if (!chunks.length) {
+    const p = document.createElement('p');
+    p.style.cssText = 'color:var(--muted);font-size:.85rem;padding:4px 0';
+    p.textContent = 'No matching content found.';
+    container.appendChild(p);
+    return;
+  }
+  for (const chunk of chunks) {
+    const div = document.createElement('div');
+    div.className = 'rag-chunk';
+    const src = document.createElement('div');
+    src.className = 'rag-chunk-source';
+    const loc = chunk.page != null ? 'p. ' + chunk.page : (chunk.chapter || '');
+    src.textContent = chunk.filename + (loc ? ' — ' + loc : '');
+    const txt = document.createElement('div');
+    txt.className = 'rag-chunk-text';
+    txt.textContent = chunk.text;
+    div.appendChild(src);
+    div.appendChild(txt);
+    container.appendChild(div);
+  }
+}
+
+async function ragSearch() {
+  const q = document.getElementById('rag-input').value.trim();
+  if (!q) return;
+  const el = document.getElementById('rag-results');
+  _ragStatus(el, 'Searching...');
+  try {
+    const ch = encodeURIComponent(S.channel || '');
+    const data = await fetch(
+      '/api/rag/search?q=' + encodeURIComponent(q) + '&channel=' + ch
+    ).then(r => r.json());
+    _renderRagResults(data.chunks || [], el, null);
+  } catch {
+    _ragError(el, 'Search failed. Check server logs.');
+  }
+}
+
+async function ragAsk() {
+  const q = document.getElementById('rag-input').value.trim();
+  if (!q) return;
+  const el = document.getElementById('rag-results');
+  _ragStatus(el, 'Generating answer...');
+  try {
+    const data = await fetch('/api/rag/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, channel: S.channel || '' }),
+    }).then(r => r.json());
+    _renderRagResults(data.chunks || [], el, data.answer || null);
+  } catch {
+    _ragError(el, 'Ask failed. Is Ollama running?');
+  }
+}
 
 /* ── Boot ── */
 async function init() {
