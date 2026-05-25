@@ -73,11 +73,9 @@ class Indexer:
     def delete_file(self, media_id: int) -> None:
         """Remove all chunks for media_id from the collection."""
         try:
-            existing = self._col.get(where={"media_id": {"$eq": media_id}})
-            if existing["ids"]:
-                self._col.delete(ids=existing["ids"])
+            self._col.delete(where={"media_id": {"$eq": media_id}})
         except Exception as exc:
-            log.debug(f"RAG delete_file({media_id}): {exc}")
+            log.warning(f"RAG delete_file({media_id}) failed: {exc}")
 
     def is_indexed(self, media_id: int) -> bool:
         try:
