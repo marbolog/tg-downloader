@@ -530,8 +530,9 @@ async def cmd_ask(db: Database, config: dict, args) -> None:
     if args.top_k is not None:
         top_k = args.top_k
 
+    channel = getattr(args, "channel", "") or ""
     if args.sources_only:
-        chunks = db.search_fts_query(args.query, top_k=top_k)
+        chunks = db.search_fts_query(args.query, top_k=top_k, channel_identifier=channel)
         if not chunks:
             print("No relevant content found.")
             return
@@ -545,7 +546,7 @@ async def cmd_ask(db: Database, config: dict, args) -> None:
     if not api_key:
         print("Error: ANTHROPIC_API_KEY environment variable not set.")
         return
-    chunks = db.search_fts_query(args.query, top_k=top_k)
+    chunks = db.search_fts_query(args.query, top_k=top_k, channel_identifier=channel)
     if not chunks:
         print("No relevant content found in the library.")
         return
