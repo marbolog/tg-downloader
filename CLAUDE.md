@@ -163,7 +163,7 @@ On each `listen` startup the listener:
 3. **Real-time** — downloads new messages immediately as they arrive via `asyncio.create_task`.
 4. **Retention cleanup** — runs once on startup then every hour; deletes files older than `download.retention_days` days (set to 0 to disable).
 
-`downloader.py` limits concurrency to `CONCURRENT_DOWNLOADS = 1` via `asyncio.Semaphore`. Raise to 3 on faster connections; keep at 1 on Raspberry Pi — each concurrent download runs Telethon's MTProto crypto in software AES, which pegs ARM cores and spins the fan under sustained backfill load.
+Concurrency is controlled by `download.concurrent_downloads` in `config.yaml` (default: 1). The listener constructs the `asyncio.Semaphore` from this value and passes it into `download_item`. Raise to 3 on faster connections; keep at 1 on Raspberry Pi — each concurrent download runs Telethon's MTProto crypto in software AES, which pegs ARM cores and spins the fan under sustained backfill load. The SHA-256 hash step runs via `asyncio.to_thread` so disk I/O doesn't block the event loop when concurrency > 1.
 
 ### Content filters (`lang_filter.py`)
 

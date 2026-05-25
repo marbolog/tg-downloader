@@ -6,7 +6,7 @@ from telethon import TelegramClient, events
 from telethon.tl.types import PeerChannel, PeerChat
 
 from db import Database
-from downloader import download_item, CONCURRENT_DOWNLOADS
+from downloader import download_item
 
 log = logging.getLogger(__name__)
 
@@ -16,11 +16,12 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     destination = Path(config["download"]["destination"])
     allowed = set(config["filters"]["extensions"])
     retention_days = config["download"]["retention_days"]
+    concurrent_downloads = config["download"]["concurrent_downloads"]
     topic_keywords = config["filters"].get("discard_topics") or {}
     topic_min_matches = config["filters"].get("topic_min_matches", 2)
     topic_min_occurrences = config["filters"].get("topic_min_keyword_occurrences", 1)
     destination.mkdir(parents=True, exist_ok=True)
-    semaphore = asyncio.Semaphore(CONCURRENT_DOWNLOADS)
+    semaphore = asyncio.Semaphore(concurrent_downloads)
 
     # Download any items that were recorded but not yet downloaded in a previous session.
     await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)

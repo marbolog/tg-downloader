@@ -13,7 +13,9 @@ Topic filtering:
   keyword hit count reaches min_matches.
 
 Combined analysis:
-  analyze_file() extracts text once and runs both detectors. Use this in
+  analyze_file() opens each PDF/EPUB exactly once when topics are configured:
+  text is split into (metadata, lang_body, topic_body). lang_body feeds
+  langdetect; metadata + topic_body feeds topic matching. Use this in
   download_item() instead of calling detect_language() + detect_topic()
   separately, which would parse the file twice.
 """
@@ -80,10 +82,15 @@ def analyze_file(
     langdetect more signal.
     """
     has_topics = bool(topic_keywords or compiled_patterns)
-    # Language detection uses shallow body-only text; topic detection uses
-    # deeper extraction that prepends document metadata.
-    lang_text = _extract_text(file_path, ext, topic_depth=False)
-    topic_text = _extract_text(file_path, ext, topic_depth=True) if has_topics else None
+
+    if has_topics:
+        # Single open of the file; split output so each detector gets the right slice.
+        metadata, lang_text, topic_body = _extract_text_parts(file_path, ext)
+        topic_text = (metadata + " " + topic_body).strip() if metadata else topic_body
+    else:
+        # Shallow path — no topic detection needed, so don't read deeper than necessary.
+        lang_text = _extract_text(file_path, ext, topic_depth=False)
+        topic_text = None
 
     lang = _run_lang_detection(file_path.name, lang_text)
     if lang is None and ext in ("pdf", "epub") and _filename_is_german(file_path.name):
@@ -148,6 +155,23 @@ def detect_topic(
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _extract_text_parts(file_path: Path, ext: str) -> tuple[str, str, str]:
+    """Single-pass extraction used by analyze_file. Returns (metadata, lang_body, topic_body).
+
+    Both bodies come from a single doc/zipfile open. lang_body uses the shallow
+    page/chapter limits and excludes EPUB nav/TOC noise; topic_body uses the
+    deeper limits and includes nav/TOC. Empty strings on error or unsupported format.
+    """
+    try:
+        if ext == "pdf":
+            return _pdf_text_parts(file_path)
+        if ext == "epub":
+            return _epub_text_parts(file_path)
+    except Exception as exc:
+        log.warning(f"{file_path.name}: text extraction error: {exc}")
+    return "", "", ""
+
 
 def _extract_text(file_path: Path, ext: str, *, topic_depth: bool) -> str | None:
     """Extract raw text from PDF or EPUB. Returns None for other formats or on error.
@@ -244,6 +268,25 @@ def _pdf_text(file_path: Path, pages: int, *, include_metadata: bool = False) ->
     return " ".join(parts)
 
 
+def _pdf_text_parts(file_path: Path) -> tuple[str, str, str]:
+    """Open the PDF once and return (metadata, lang_body, topic_body).
+
+    Reads up to _PDF_TOPIC_PAGES pages; lang_body is the first _PDF_PAGES of those.
+    """
+    doc = fitz.open(str(file_path))
+    meta = doc.metadata or {}
+    metadata = " ".join(filter(None, [
+        meta.get("title", ""),
+        meta.get("subject", ""),
+        meta.get("keywords", ""),
+    ]))
+    topic_n = min(_PDF_TOPIC_PAGES, doc.page_count)
+    pages_text = [doc[i].get_text() for i in range(topic_n)]
+    lang_body = " ".join(pages_text[:_PDF_PAGES])
+    topic_body = " ".join(pages_text)
+    return metadata, lang_body, topic_body
+
+
 def _epub_text(file_path: Path, *, topic_depth: bool) -> str:
     with zipfile.ZipFile(file_path) as zf:
         parts = []
@@ -282,6 +325,47 @@ def _epub_text(file_path: Path, *, topic_depth: bool) -> str:
             except Exception:
                 continue
         return " ".join(parts)
+
+
+def _epub_text_parts(file_path: Path) -> tuple[str, str, str]:
+    """Open the EPUB once and return (metadata, lang_body, topic_body)."""
+    with zipfile.ZipFile(file_path) as zf:
+        metadata = ""
+        opf = next((n for n in zf.namelist() if n.lower().endswith(".opf")), None)
+        if opf:
+            try:
+                opf_content = zf.read(opf).decode("utf-8", errors="ignore")
+                fields = re.findall(
+                    r"<dc:(?:title|subject|description)[^>]*>([^<]+)</dc:\w+>",
+                    opf_content,
+                    re.IGNORECASE,
+                )
+                if fields:
+                    metadata = " ".join(fields)
+            except Exception:
+                pass
+
+        all_html = sorted(
+            n for n in zf.namelist()
+            if n.lower().endswith((".html", ".xhtml", ".htm"))
+        )
+        # Language path excludes nav/TOC — short, mixed-language, noisy.
+        lang_html = [n for n in all_html if "toc" not in n.lower() and "nav" not in n.lower()]
+
+        lang_body = _read_epub_chapters(zf, lang_html[:_EPUB_CHAPTERS])
+        topic_body = _read_epub_chapters(zf, all_html[:_EPUB_TOPIC_CHAPTERS])
+        return metadata, lang_body, topic_body
+
+
+def _read_epub_chapters(zf: zipfile.ZipFile, names: list[str]) -> str:
+    parts = []
+    for name in names:
+        try:
+            raw = zf.read(name).decode("utf-8", errors="ignore")
+            parts.append(_strip_html(raw))
+        except Exception:
+            continue
+    return " ".join(parts)
 
 
 class _TextExtractor(HTMLParser):

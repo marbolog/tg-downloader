@@ -272,5 +272,8 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     for migration in _MIGRATIONS:
         try:
             conn.execute(migration)
-        except sqlite3.OperationalError:
-            pass  # Column already exists — migration already applied
+        except sqlite3.OperationalError as exc:
+            # Only swallow the "already applied" case (duplicate column on ADD COLUMN).
+            # Anything else (locked DB, disk full, syntax error) must surface.
+            if "duplicate column name" not in str(exc).lower():
+                raise

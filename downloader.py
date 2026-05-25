@@ -10,8 +10,6 @@ from utils import compute_sha256, human_size, unique_path
 
 log = logging.getLogger(__name__)
 
-CONCURRENT_DOWNLOADS = 1
-
 
 async def download_item(
     client: TelegramClient,
@@ -69,7 +67,9 @@ async def download_item(
 
             file_hash = None
             try:
-                file_hash = compute_sha256(filepath)
+                # Hashing is disk-bound; offload so it doesn't block other awaits
+                # (e.g. event-loop message reception when concurrency > 1).
+                file_hash = await asyncio.to_thread(compute_sha256, filepath)
             except Exception as exc:
                 log.warning(f"[{label}] Hash failed for {item['filename']!r}: {exc}")
 
