@@ -14,29 +14,8 @@ log = logging.getLogger(__name__)
 
 DB_PATH = Path(os.environ.get("DB_PATH", "/app/data/tg_downloader.db"))
 THUMBS_DIR = Path(os.environ.get("THUMBS_DIR", "/app/data/thumbs"))
-
-RAG_INDEX_PATH = os.environ.get("RAG_INDEX_PATH", "/app/data/rag_index")
-RAG_EMBED_MODEL = os.environ.get("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
-RAG_OLLAMA_URL = os.environ.get("RAG_OLLAMA_URL", "http://host.docker.internal:11434")
-RAG_OLLAMA_MODEL = os.environ.get("RAG_OLLAMA_MODEL", "phi3:mini")
-RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
-
-_rag_indexer = None
-
-
-def _get_indexer():
-    global _rag_indexer
-    if _rag_indexer is None:
-        try:
-            from rag.indexer import Indexer
-            _rag_indexer = Indexer({
-                "index_path": RAG_INDEX_PATH,
-                "embed_model": RAG_EMBED_MODEL,
-            })
-        except Exception as exc:
-            log.warning(f"RAG indexer unavailable: {exc}")
-    return _rag_indexer
-
+SEARCH_TOP_K = int(os.environ.get("SEARCH_TOP_K", "8"))
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 app = FastAPI()
 
@@ -238,6 +217,7 @@ def discard_files(req: DiscardRequest):
                 "UPDATE media_messages SET status='discarded', local_path=NULL WHERE id=?",
                 (file_id,),
             )
+            conn.execute("DELETE FROM search_fts WHERE media_id = ?", (str(file_id),))
             thumb = THUMBS_DIR / f"{file_id}.jpg"
             if thumb.exists():
                 thumb.unlink()
@@ -273,15 +253,47 @@ def download_file(file_id: int):
     )
 
 
-@app.get("/api/rag/search")
-def rag_search(q: str, channel: str = "", top_k: int = 0):
-    from rag.retriever import retrieve
-    indexer = _get_indexer()
-    if indexer is None:
-        return {"chunks": [], "error": "RAG index not available"}
-    k = top_k or RAG_TOP_K
-    chunks = retrieve(q, indexer, top_k=k, channel_identifier=channel or None)
-    return {"chunks": chunks}
+@app.get("/api/search")
+def fts_search(q: str, channel: str = "", top_k: int = 0):
+    if not q.strip():
+        return {"chunks": []}
+    conn = _db()
+    try:
+        k = top_k or SEARCH_TOP_K
+        if channel:
+            rows = conn.execute(
+                """SELECT media_id, filename, page, chapter,
+                          snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
+                   FROM search_fts
+                   WHERE search_fts MATCH ? AND channel_identifier = ?
+                   ORDER BY rank LIMIT ?""",
+                (q, channel, k),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT media_id, filename, page, chapter,
+                          snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
+                   FROM search_fts
+                   WHERE search_fts MATCH ?
+                   ORDER BY rank LIMIT ?""",
+                (q, k),
+            ).fetchall()
+        chunks = [
+            {
+                "media_id": int(r["media_id"]),
+                "filename": r["filename"],
+                "page": r["page"],
+                "chapter": r["chapter"],
+                "text": r["text"],
+            }
+            for r in rows
+        ]
+        return {"chunks": chunks}
+    except Exception as exc:
+        log.warning(f"FTS5 search error for {q!r}: {exc}")
+        return {"chunks": [], "error": str(exc)}
+    finally:
+        conn.close()
 
 
 class _AskRequest(BaseModel):
@@ -290,24 +302,45 @@ class _AskRequest(BaseModel):
     top_k: int = 0
 
 
-@app.post("/api/rag/ask")
-async def rag_ask(req: _AskRequest):
-    from rag.retriever import retrieve
-    from rag.generator import generate, OllamaUnavailableError
-    indexer = _get_indexer()
-    if indexer is None:
-        raise HTTPException(status_code=503, detail="RAG index not available")
-    k = req.top_k or RAG_TOP_K
-    chunks = retrieve(req.query, indexer, top_k=k, channel_identifier=req.channel or None)
+@app.post("/api/ask")
+async def fts_ask(req: _AskRequest):
+    from fastapi.responses import StreamingResponse
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+    conn = _db()
+    try:
+        k = req.top_k or SEARCH_TOP_K
+        if req.channel:
+            rows = conn.execute(
+                """SELECT media_id, filename, page, chapter,
+                          snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
+                   FROM search_fts
+                   WHERE search_fts MATCH ? AND channel_identifier = ?
+                   ORDER BY rank LIMIT ?""",
+                (req.query, req.channel, k),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT media_id, filename, page, chapter,
+                          snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
+                   FROM search_fts
+                   WHERE search_fts MATCH ? ORDER BY rank LIMIT ?""",
+                (req.query, k),
+            ).fetchall()
+        chunks = [dict(r) for r in rows]
+    finally:
+        conn.close()
+
     if not chunks:
         return {"answer": "No relevant content found in the library.", "chunks": []}
-    try:
-        tokens = []
-        async for token in generate(req.query, chunks, RAG_OLLAMA_URL, RAG_OLLAMA_MODEL):
-            tokens.append(token)
-        return {"answer": "".join(tokens), "chunks": chunks}
-    except OllamaUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+
+    from search.generator import generate
+
+    async def _stream():
+        async for token in generate(req.query, chunks, ANTHROPIC_API_KEY):
+            yield token
+
+    return StreamingResponse(_stream(), media_type="text/plain")
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
