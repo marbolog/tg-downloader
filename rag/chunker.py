@@ -9,9 +9,8 @@ from pathlib import Path
 import fitz  # PyMuPDF -- already a project dependency
 
 SUPPORTED_EXTS = {"pdf", "epub"}
-_CHUNK_SIZE = 800    # target characters per chunk
+_CHUNK_SIZE = 800    # 800 chars fits within all-MiniLM-L6-v2's 256-token limit (~3 chars/token)
 _OVERLAP = 100       # characters of overlap between consecutive chunks
-_MIN_CHUNK = 100     # short paragraph fragments below this length are merged/skipped
 
 
 def chunk_file(file_path: Path, ext: str) -> list[dict]:
