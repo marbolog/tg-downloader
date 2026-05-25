@@ -86,4 +86,5 @@ def test_epub_chunks_have_required_keys(tmp_path):
         assert "chapter" in chunk
         assert "text" in chunk
         assert chunk["page"] is None
-    assert "Chapter 1" in chunks[0]["chapter"] or "First chapter" in chunks[0]["text"]
+    assert chunks[0]["chapter"] == "Chapter 1"
+    assert "First chapter" in chunks[0]["text"] or "Chapter 1" in chunks[0]["text"]

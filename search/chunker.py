@@ -6,6 +6,7 @@ Each chunk dict: {chunk_idx, page, chapter, text}
 page is 1-based for PDF, None for EPUB.
 chapter is None for PDF, heading text for EPUB.
 """
+import html.parser as _html_parser
 import re
 import zipfile
 from pathlib import Path
@@ -16,8 +17,6 @@ import fitz
 SUPPORTED_EXTS = {"pdf", "epub"}
 _HEADING_RE = re.compile(r"<h[1-3][^>]*>(.*?)</h[1-3]>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
-_ENTITY_RE = re.compile(r"&(?:amp|lt|gt|nbsp|quot|apos);")
-_ENTITY_MAP = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&nbsp;": " ", "&quot;": '"', "&apos;": "'"}
 
 
 def chunk_file(path: Path, ext: str) -> list[dict]:
@@ -33,18 +32,21 @@ def _chunk_pdf(path: Path) -> list[dict]:
         doc = fitz.open(str(path))
     except Exception:
         return []
-    chunks = []
-    for page_num in range(doc.page_count):
-        text = doc[page_num].get_text().strip()
-        if not text:
-            continue
-        chunks.append({
-            "chunk_idx": len(chunks),
-            "page": page_num + 1,
-            "chapter": None,
-            "text": text,
-        })
-    return chunks
+    try:
+        chunks = []
+        for page_num in range(doc.page_count):
+            text = doc[page_num].get_text().strip()
+            if not text:
+                continue
+            chunks.append({
+                "chunk_idx": len(chunks),
+                "page": page_num + 1,
+                "chapter": None,
+                "text": text,
+            })
+        return chunks
+    finally:
+        doc.close()
 
 
 def _chunk_epub(path: Path) -> list[dict]:
@@ -88,13 +90,16 @@ def _parse_spine(zf: zipfile.ZipFile, opf_path: str) -> list[str]:
         root = ET.fromstring(zf.read(opf_path))
     except Exception:
         return []
+    all_names = set(zf.namelist())
     id_to_href: dict[str, str] = {}
     for item in root.findall(".//{http://www.idpf.org/2007/opf}item"):
         item_id = item.get("id", "")
         href = item.get("href", "")
         mt = item.get("media-type", "")
         if "xhtml" in mt or "html" in mt:
-            id_to_href[item_id] = base + href
+            resolved = base + href
+            if resolved in all_names:
+                id_to_href[item_id] = resolved
     hrefs = []
     for itemref in root.findall(".//{http://www.idpf.org/2007/opf}itemref"):
         idref = itemref.get("idref", "")
@@ -110,9 +115,31 @@ def _extract_heading(html: str) -> str | None:
     return None
 
 
+class _TextExtractor(_html_parser.HTMLParser):
+    _SKIP = {"script", "style"}
+
+    def __init__(self):
+        super().__init__()
+        self._parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in self._SKIP:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in self._SKIP:
+            self._skip_depth = max(0, self._skip_depth - 1)
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            self._parts.append(data)
+
+    def get_text(self) -> str:
+        return re.sub(r"\s+", " ", " ".join(self._parts)).strip()
+
+
 def _html_to_text(html: str) -> str:
-    # Strip tags, decode basic entities
-    text = _TAG_RE.sub(" ", html)
-    text = _ENTITY_RE.sub(lambda m: _ENTITY_MAP.get(m.group(0), m.group(0)), text)
-    # Collapse whitespace
-    return re.sub(r"\s+", " ", text).strip()
+    extractor = _TextExtractor()
+    extractor.feed(html)
+    return extractor.get_text()
