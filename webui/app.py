@@ -262,7 +262,7 @@ def fts_search(q: str, channel: str = "", top_k: int = 0):
         k = top_k or SEARCH_TOP_K
         if channel:
             rows = conn.execute(
-                """SELECT media_id, filename, page, chapter,
+                """SELECT media_id, filename, page, chapter, channel_identifier,
                           snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
                    FROM search_fts
                    WHERE search_fts MATCH ? AND channel_identifier = ?
@@ -271,7 +271,7 @@ def fts_search(q: str, channel: str = "", top_k: int = 0):
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT media_id, filename, page, chapter,
+                """SELECT media_id, filename, page, chapter, channel_identifier,
                           snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
                    FROM search_fts
                    WHERE search_fts MATCH ?
@@ -284,6 +284,7 @@ def fts_search(q: str, channel: str = "", top_k: int = 0):
                 "filename": r["filename"],
                 "page": r["page"],
                 "chapter": r["chapter"],
+                "channel_identifier": r["channel_identifier"],
                 "text": r["text"],
             }
             for r in rows
