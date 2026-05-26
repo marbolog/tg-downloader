@@ -413,6 +413,7 @@ function renderSnippet(container, raw) {
 function _renderRagResults(chunks, container, answer) {
   container.replaceChildren();
   container.style.display = 'block';
+
   if (answer) {
     const box = document.createElement('div');
     box.className = 'rag-answer';
@@ -426,6 +427,17 @@ function _renderRagResults(chunks, container, answer) {
     box.appendChild(txt);
     container.appendChild(box);
   }
+
+  const docCount = new Set(chunks.map(c => c.media_id)).size;
+  const countBar = document.createElement('p');
+  countBar.className = 'rag-count';
+  countBar.textContent =
+    docCount + ' document' + (docCount !== 1 ? 's' : '') +
+    ' · ' +
+    chunks.length + ' passage' + (chunks.length !== 1 ? 's' : '') +
+    ' — sorted by relevance';
+  container.appendChild(countBar);
+
   if (!chunks.length) {
     const p = document.createElement('p');
     p.style.cssText = 'color:var(--muted);font-size:.85rem;padding:4px 0';
@@ -433,19 +445,65 @@ function _renderRagResults(chunks, container, answer) {
     container.appendChild(p);
     return;
   }
+
+  const groups = new Map();
   for (const chunk of chunks) {
-    const div = document.createElement('div');
-    div.className = 'rag-chunk';
-    const src = document.createElement('div');
-    src.className = 'rag-chunk-source';
-    const loc = chunk.page != null ? 'p. ' + chunk.page : (chunk.chapter || '');
-    src.textContent = chunk.filename + (loc ? ' — ' + loc : '');
-    const txt = document.createElement('div');
-    txt.className = 'rag-chunk-text';
-    renderSnippet(txt, chunk.text || '');
-    div.appendChild(src);
-    div.appendChild(txt);
-    container.appendChild(div);
+    if (!groups.has(chunk.media_id)) {
+      groups.set(chunk.media_id, {
+        mediaId: chunk.media_id,
+        filename: chunk.filename,
+        channel: chunk.channel_identifier || '',
+        chunks: [],
+      });
+    }
+    groups.get(chunk.media_id).chunks.push(chunk);
+  }
+
+  for (const group of groups.values()) {
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'rag-group';
+
+    const header = document.createElement('div');
+    header.className = 'rag-group-header';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'rag-group-header-name';
+    nameEl.title = group.filename;
+    nameEl.textContent = group.filename;
+    header.appendChild(nameEl);
+
+    if (group.channel) {
+      const chanEl = document.createElement('span');
+      chanEl.className = 'rag-group-header-channel';
+      chanEl.textContent = group.channel;
+      header.appendChild(chanEl);
+    }
+
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'btn rag-group-header-view';
+    viewBtn.textContent = '↗ View';
+    viewBtn.onclick = () => viewCard(group.mediaId);
+    header.appendChild(viewBtn);
+    groupDiv.appendChild(header);
+
+    for (const chunk of group.chunks) {
+      const div = document.createElement('div');
+      div.className = 'rag-chunk';
+      const loc = chunk.page != null ? 'p. ' + chunk.page : (chunk.chapter || '');
+      if (loc) {
+        const src = document.createElement('div');
+        src.className = 'rag-chunk-source';
+        src.textContent = loc;
+        div.appendChild(src);
+      }
+      const txt = document.createElement('div');
+      txt.className = 'rag-chunk-text';
+      renderSnippet(txt, chunk.text || '');
+      div.appendChild(txt);
+      groupDiv.appendChild(div);
+    }
+
+    container.appendChild(groupDiv);
   }
 }
 
