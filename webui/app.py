@@ -45,7 +45,7 @@ def list_languages():
 
 
 @app.get("/api/files")
-def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: str = "", hide_dupes: bool = True):
+def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: str = "", hide_dupes: bool = True, ids: str = ""):
     offset = (page - 1) * per_page
     conn = _db()
     try:
@@ -59,6 +59,12 @@ def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: s
         elif language:
             where += " AND m.language = ?"
             params.append(language)
+        if ids:
+            id_list = [int(i) for i in ids.split(",") if i.strip().isdigit()]
+            if id_list:
+                placeholders = ",".join("?" * len(id_list))
+                where += f" AND m.id IN ({placeholders})"
+                params.extend(id_list)
 
         rows = conn.execute(
             f"""

@@ -323,9 +323,11 @@ body {
     <input id="rag-input" type="search" class="rag-input"
            placeholder="Search your library..."
            autocomplete="off"
-           onkeydown="if(event.key==='Enter')ragSearch()">
+           onkeydown="if(event.key==='Enter')ragSearch()"
+           oninput="if(!this.value)clearSearchFilter()">
     <button class="btn" onclick="ragSearch()">Search</button>
     <button class="btn btn-primary" onclick="ragAsk()">Ask AI</button>
+    <button id="btn-clear-search" class="btn" onclick="clearSearchFilter()" style="display:none">✕ Clear filter</button>
   </div>
   <div id="rag-results" class="rag-results" style="display:none"></div>
 </div>
@@ -351,7 +353,7 @@ body {
 
 <script>
 /* ── State ── */
-const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', language: '', hideDupes: true, selected: new Set(), highlightId: null };
+const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', language: '', hideDupes: true, selected: new Set(), highlightId: null, searchIds: [] };
 
 const LANG_NAMES = {
   af:'Afrikaans', ar:'Arabic', bg:'Bulgarian', ca:'Catalan', cs:'Czech',
@@ -516,10 +518,27 @@ async function ragSearch() {
     const data = await fetch(
       '/api/search?' + new URLSearchParams({ q, channel: S.channel || '' })
     ).then(r => r.json());
-    _renderRagResults(data.chunks || [], el, null);
+    const chunks = data.chunks || [];
+    _renderRagResults(chunks, el, null);
+    const ids = [...new Set(chunks.map(c => c.media_id))];
+    S.searchIds = ids;
+    S.page = 1;
+    S.selected.clear();
+    document.getElementById('btn-clear-search').style.display = ids.length ? '' : 'none';
+    load();
   } catch {
     _ragError(el, 'Search failed. Check server logs.');
   }
+}
+
+function clearSearchFilter() {
+  S.searchIds = [];
+  S.page = 1;
+  S.selected.clear();
+  document.getElementById('btn-clear-search').style.display = 'none';
+  document.getElementById('rag-results').style.display = 'none';
+  document.getElementById('rag-results').replaceChildren();
+  load();
 }
 
 async function ragAsk() {
@@ -578,9 +597,7 @@ function toggleDupes() {
 }
 
 function viewCard(mediaId) {
-  document.getElementById('ch-filter').value = '';
-  document.getElementById('lang-filter').value = '';
-  S.channel = ''; S.language = ''; S.page = 1; S.highlightId = mediaId;
+  S.highlightId = mediaId;
   load();
 }
 
@@ -588,6 +605,7 @@ function viewCard(mediaId) {
 async function load() {
   document.getElementById('grid').innerHTML = '<div class="loading-msg"><h2>Loading…</h2></div>';
   const qs = new URLSearchParams({ page: S.page, per_page: S.perPage, channel: S.channel, language: S.language, hide_dupes: S.hideDupes });
+  if (S.searchIds.length) qs.set('ids', S.searchIds.join(','));
   try {
     const d = await fetch(`/api/files?${qs}`).then(r => r.json());
     S.files = d.items; S.total = d.total;
