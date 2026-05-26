@@ -272,6 +272,30 @@ body {
 .rag-answer-label { font-size: .73rem; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
 .rag-answer-text { font-size: .85rem; color: var(--text); line-height: 1.6; white-space: pre-wrap; }
 
+.rag-count {
+  font-size: .78rem; color: var(--muted); padding: 2px 0 6px;
+}
+.rag-group {
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+}
+.rag-group + .rag-group { margin-top: 8px; }
+.rag-group-header {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); padding: 8px 12px;
+}
+.rag-group-header-name {
+  font-size: .8rem; font-weight: 600; color: var(--text);
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rag-group-header-channel {
+  font-size: .72rem; color: var(--muted); flex-shrink: 0;
+}
+.rag-group-header-view { font-size: .72rem; padding: 3px 8px; flex-shrink: 0; }
+.rag-group .rag-chunk {
+  border: none; border-radius: 0;
+  border-top: 1px solid var(--border);
+}
+
 @keyframes card-flash {
   0%   { box-shadow: 0 0 0 3px var(--accent); background: var(--accent-light); }
   100% { box-shadow: none; background: var(--surface); }
