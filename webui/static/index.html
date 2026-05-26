@@ -522,6 +522,7 @@ function makeCard(f) {
   const card = document.createElement('div');
   card.className = 'card' + (S.selected.has(f.id) ? ' selected' : '');
   card.dataset.id = f.id;
+  card.id = 'card-' + f.id;
 
   const ext  = (f.ext || '').toLowerCase();
   const icon = EXT_ICON[ext] || '📁';
