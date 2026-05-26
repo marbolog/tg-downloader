@@ -271,6 +271,12 @@ body {
 }
 .rag-answer-label { font-size: .73rem; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
 .rag-answer-text { font-size: .85rem; color: var(--text); line-height: 1.6; white-space: pre-wrap; }
+
+@keyframes card-flash {
+  0%   { box-shadow: 0 0 0 3px var(--accent); background: var(--accent-light); }
+  100% { box-shadow: none; background: var(--surface); }
+}
+.card-highlight { animation: card-flash 1.5s ease-out forwards; }
 </style>
 </head>
 <body>
@@ -321,7 +327,7 @@ body {
 
 <script>
 /* ── State ── */
-const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', language: '', hideDupes: true, selected: new Set() };
+const S = { files: [], total: 0, page: 1, perPage: 60, channel: '', language: '', hideDupes: true, selected: new Set(), highlightId: null };
 
 const LANG_NAMES = {
   af:'Afrikaans', ar:'Arabic', bg:'Bulgarian', ca:'Catalan', cs:'Czech',
@@ -489,6 +495,13 @@ function toggleDupes() {
   load();
 }
 
+function viewCard(mediaId) {
+  document.getElementById('ch-filter').value = '';
+  document.getElementById('lang-filter').value = '';
+  S.channel = ''; S.language = ''; S.page = 1; S.highlightId = mediaId;
+  load();
+}
+
 /* ── Data ── */
 async function load() {
   document.getElementById('grid').innerHTML = '<div class="loading-msg"><h2>Loading…</h2></div>';
@@ -509,6 +522,7 @@ function renderGrid() {
   if (!S.files.length) {
     grid.innerHTML = '<div class="empty"><h2>No downloaded files</h2><p>Files will appear here once downloaded.</p></div>';
     meta.textContent = '';
+    S.highlightId = null;
     return;
   }
   const start = (S.page - 1) * S.perPage + 1;
@@ -516,6 +530,17 @@ function renderGrid() {
   meta.textContent = `Showing ${start}–${end} of ${S.total.toLocaleString()} files`;
   grid.innerHTML = '';
   S.files.forEach(f => grid.appendChild(makeCard(f)));
+  if (S.highlightId != null) {
+    const target = document.getElementById('card-' + S.highlightId);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.add('card-highlight');
+      target.addEventListener('animationend', () => target.classList.remove('card-highlight'), { once: true });
+    } else {
+      toast('File found — navigate to the right page to see it');
+    }
+    S.highlightId = null;
+  }
 }
 
 function makeCard(f) {
