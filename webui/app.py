@@ -346,11 +346,10 @@ async def fts_ask(req: _AskRequest):
 
     from search.generator import generate
 
-    async def _stream():
-        async for token in generate(req.query, chunks, ANTHROPIC_API_KEY):
-            yield token
-
-    return StreamingResponse(_stream(), media_type="text/plain")
+    tokens = []
+    async for token in generate(req.query, chunks, ANTHROPIC_API_KEY):
+        tokens.append(token)
+    return {"answer": "".join(tokens), "chunks": chunks}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
