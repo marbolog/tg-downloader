@@ -30,6 +30,10 @@ import fitz
 from langdetect import DetectorFactory, detect_langs
 from langdetect.lang_detect_exception import LangDetectException
 
+# Silence MuPDF's C-layer stderr spew on malformed PDFs (it bypasses Python
+# try/except). Failures are already handled where text is extracted.
+fitz.TOOLS.mupdf_display_errors(False)
+
 DetectorFactory.seed = 0  # make detection deterministic
 
 log = logging.getLogger(__name__)

@@ -14,6 +14,11 @@ from xml.etree import ElementTree as ET
 
 import fitz
 
+# Silence MuPDF's C-layer stderr spew (e.g. "format error: non-page object in
+# page tree") on malformed PDFs — these bypass Python try/except. We already
+# handle the failures per page; the raw library noise is not actionable.
+fitz.TOOLS.mupdf_display_errors(False)
+
 SUPPORTED_EXTS = {"pdf", "epub"}
 _HEADING_RE = re.compile(r"<h[1-3][^>]*>(.*?)</h[1-3]>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")

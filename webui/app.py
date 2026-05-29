@@ -107,6 +107,7 @@ def _generate_thumb(file_path: Path, ext: str) -> bytes | None:
     try:
         if ext == "pdf":
             import fitz
+            fitz.TOOLS.mupdf_display_errors(False)  # suppress C-layer stderr noise
             doc = fitz.open(str(file_path))
             if not doc.page_count:
                 return None
