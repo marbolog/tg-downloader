@@ -75,3 +75,27 @@ def test_missing_media_ids(db):
     chunks = [{"chunk_idx": 0, "page": 1, "chapter": None, "text": "test content"}]
     db.search_fts_index_file(media_id=1, chunks=chunks, filename="test.pdf")
     assert db.search_fts_missing_media_ids() == []
+
+
+def test_missing_excludes_processed_textless_files(db):
+    """A file marked indexed_at (e.g. an image-only PDF that produced no chunks)
+    must not be re-attempted by the startup heal, even though it has no rows in
+    search_fts."""
+    with db._conn() as conn:
+        conn.execute(
+            "INSERT INTO channels (telegram_id, identifier, title) VALUES (200, '@t', 'T')"
+        )
+        conn.execute(
+            """INSERT INTO media_messages
+                   (channel_id, message_id, filename, size, ext, status, local_path)
+               VALUES (1, 1, 'scanned.pdf', 1000, 'pdf', 'downloaded', '/tmp/scanned.pdf')"""
+        )
+        conn.commit()
+
+    # Initially missing (downloaded, not in search_fts, no indexed_at).
+    assert len(db.search_fts_missing_media_ids()) == 1
+
+    # Marking it processed (no chunks were extractable) removes it from the heal
+    # set without adding anything to search_fts.
+    db.mark_indexed(1)
+    assert db.search_fts_missing_media_ids() == []

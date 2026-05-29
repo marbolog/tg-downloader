@@ -1,15 +1,24 @@
 import io
 import logging
 import os
-import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from rich.logging import RichHandler
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+from db import Database
+
+# Match the main app's logging style (rich, message-focused) so listener and
+# web UI logs read the same when viewed side by side via `docker compose logs`.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(show_path=False)],
+)
 log = logging.getLogger(__name__)
 
 DB_PATH = Path(os.environ.get("DB_PATH", "/app/data/tg_downloader.db"))
@@ -18,78 +27,28 @@ SEARCH_TOP_K = int(os.environ.get("SEARCH_TOP_K", "8"))
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 app = FastAPI()
-
-
-def _db():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
+db = Database(str(DB_PATH))
 
 
 @app.get("/api/languages")
 def list_languages():
-    conn = _db()
-    try:
-        rows = conn.execute("""
-            SELECT COALESCE(m.language, '__unknown__') AS language, COUNT(*) AS count
-            FROM media_messages m
-            JOIN channels c ON m.channel_id = c.id
-            WHERE m.status = 'downloaded'
-            GROUP BY m.language
-            HAVING count > 0
-            ORDER BY count DESC
-        """).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+    return db.language_counts()
 
 
 @app.get("/api/files")
 def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: str = "", hide_dupes: bool = True, ids: str = ""):
+    id_list = [int(i) for i in ids.split(",") if i.strip().isdigit()] if ids else None
+    all_items = db.list_downloaded_files(channel=channel, language=language, ids=id_list)
+
+    if hide_dupes:
+        all_items = _deduplicate_with_counts(all_items)
+    else:
+        for item in all_items:
+            item["copy_count"] = 1
+
     offset = (page - 1) * per_page
-    conn = _db()
-    try:
-        params: list = []
-        where = "m.status = 'downloaded'"
-        if channel:
-            where += " AND c.identifier = ?"
-            params.append(channel)
-        if language == "__unknown__":
-            where += " AND m.language IS NULL"
-        elif language:
-            where += " AND m.language = ?"
-            params.append(language)
-        if ids:
-            id_list = [int(i) for i in ids.split(",") if i.strip().isdigit()]
-            if id_list:
-                placeholders = ",".join("?" * len(id_list))
-                where += f" AND m.id IN ({placeholders})"
-                params.extend(id_list)
-
-        rows = conn.execute(
-            f"""
-            SELECT m.id, m.filename, m.size, m.ext, m.date, m.downloaded_at,
-                   m.local_path, m.language, m.file_hash,
-                   c.title AS channel_title, c.identifier AS channel_identifier
-            FROM media_messages m
-            JOIN channels c ON m.channel_id = c.id
-            WHERE {where}
-            ORDER BY m.downloaded_at DESC NULLS LAST, m.date DESC
-            """,
-            params,
-        ).fetchall()
-        all_items = [dict(r) for r in rows]
-
-        if hide_dupes:
-            all_items = _deduplicate_with_counts(all_items)
-        else:
-            for item in all_items:
-                item["copy_count"] = 1
-
-        total = len(all_items)
-        return {"total": total, "page": page, "per_page": per_page, "items": all_items[offset:offset + per_page]}
-    finally:
-        conn.close()
+    total = len(all_items)
+    return {"total": total, "page": page, "per_page": per_page, "items": all_items[offset:offset + per_page]}
 
 
 def _deduplicate_with_counts(items: list[dict]) -> list[dict]:
@@ -120,20 +79,7 @@ def _deduplicate_with_counts(items: list[dict]) -> list[dict]:
 
 @app.get("/api/channels")
 def list_channels():
-    conn = _db()
-    try:
-        rows = conn.execute("""
-            SELECT c.identifier, c.title,
-                   SUM(CASE WHEN m.status='downloaded' THEN 1 ELSE 0 END) AS count
-            FROM channels c
-            LEFT JOIN media_messages m ON m.channel_id = c.id
-            GROUP BY c.id
-            HAVING count > 0
-            ORDER BY c.title
-        """).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+    return db.channel_counts()
 
 
 @app.get("/api/thumb/{file_id}")
@@ -142,14 +88,7 @@ def get_thumb(file_id: int):
     thumb_path = THUMBS_DIR / f"{file_id}.jpg"
 
     if not thumb_path.exists():
-        conn = _db()
-        try:
-            row = conn.execute(
-                "SELECT local_path, ext FROM media_messages WHERE id = ?", (file_id,)
-            ).fetchone()
-        finally:
-            conn.close()
-
+        row = db.get_media(file_id)
         if not row or not row["local_path"]:
             raise HTTPException(status_code=404)
 
@@ -208,28 +147,19 @@ class DiscardRequest(BaseModel):
 @app.post("/api/discard")
 def discard_files(req: DiscardRequest):
     deleted_files = 0
-    conn = _db()
-    try:
-        for file_id in req.ids:
-            row = conn.execute(
-                "SELECT local_path FROM media_messages WHERE id = ?", (file_id,)
-            ).fetchone()
-            if row and row["local_path"]:
-                p = Path(row["local_path"])
-                if p.exists():
-                    p.unlink()
-                    deleted_files += 1
-            conn.execute(
-                "UPDATE media_messages SET status='discarded', local_path=NULL WHERE id=?",
-                (file_id,),
-            )
-            conn.execute("DELETE FROM search_fts WHERE media_id = ?", (str(file_id),))
-            thumb = THUMBS_DIR / f"{file_id}.jpg"
-            if thumb.exists():
-                thumb.unlink()
-        conn.commit()
-    finally:
-        conn.close()
+    for file_id in req.ids:
+        row = db.get_media(file_id)
+        if row and row["local_path"]:
+            p = Path(row["local_path"])
+            if p.exists():
+                p.unlink()
+                deleted_files += 1
+        # mark_discarded sets status='discarded', clears local_path, and removes
+        # the file's rows from search_fts in one transaction.
+        db.mark_discarded(file_id)
+        thumb = THUMBS_DIR / f"{file_id}.jpg"
+        if thumb.exists():
+            thumb.unlink()
 
     log.info(f"Discarded {deleted_files}/{len(req.ids)} files via web UI")
     return {"deleted": deleted_files, "total": len(req.ids)}
@@ -237,14 +167,7 @@ def discard_files(req: DiscardRequest):
 
 @app.get("/api/download/{file_id}")
 def download_file(file_id: int):
-    conn = _db()
-    try:
-        row = conn.execute(
-            "SELECT local_path, filename FROM media_messages WHERE id = ?", (file_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-
+    row = db.get_media(file_id)
     if not row or not row["local_path"]:
         raise HTTPException(status_code=404)
 
@@ -263,44 +186,12 @@ def download_file(file_id: int):
 def fts_search(q: str, channel: str = "", top_k: int = 0):
     if not q.strip():
         return {"chunks": []}
-    conn = _db()
     try:
-        k = top_k or SEARCH_TOP_K
-        if channel:
-            rows = conn.execute(
-                """SELECT media_id, filename, page, chapter, channel_identifier,
-                          snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
-                   FROM search_fts
-                   WHERE search_fts MATCH ? AND channel_identifier = ?
-                   ORDER BY rank LIMIT ?""",
-                (q, channel, k),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """SELECT media_id, filename, page, chapter, channel_identifier,
-                          snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
-                   FROM search_fts
-                   WHERE search_fts MATCH ?
-                   ORDER BY rank LIMIT ?""",
-                (q, k),
-            ).fetchall()
-        chunks = [
-            {
-                "media_id": int(r["media_id"]),
-                "filename": r["filename"],
-                "page": r["page"],
-                "chapter": r["chapter"],
-                "channel_identifier": r["channel_identifier"],
-                "text": r["text"],
-            }
-            for r in rows
-        ]
+        chunks = db.search_fts_query(q, top_k=top_k or SEARCH_TOP_K, channel_identifier=channel)
         return {"chunks": chunks}
     except Exception as exc:
         log.warning(f"FTS5 search error for {q!r}: {exc}")
         return {"chunks": [], "error": str(exc)}
-    finally:
-        conn.close()
 
 
 class _AskRequest(BaseModel):
@@ -311,35 +202,13 @@ class _AskRequest(BaseModel):
 
 @app.post("/api/ask")
 async def fts_ask(req: _AskRequest):
-    from fastapi.responses import StreamingResponse
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
-    conn = _db()
     try:
-        k = req.top_k or SEARCH_TOP_K
-        if req.channel:
-            rows = conn.execute(
-                """SELECT media_id, filename, page, chapter,
-                          snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
-                   FROM search_fts
-                   WHERE search_fts MATCH ? AND channel_identifier = ?
-                   ORDER BY rank LIMIT ?""",
-                (req.query, req.channel, k),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """SELECT media_id, filename, page, chapter,
-                          snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
-                   FROM search_fts
-                   WHERE search_fts MATCH ? ORDER BY rank LIMIT ?""",
-                (req.query, k),
-            ).fetchall()
-        chunks = [dict(r) for r in rows]
+        chunks = db.search_fts_query(req.query, top_k=req.top_k or SEARCH_TOP_K, channel_identifier=req.channel)
     except Exception as exc:
         log.warning(f"FTS5 query error for {req.query!r}: {exc}")
         chunks = []
-    finally:
-        conn.close()
 
     if not chunks:
         return {"answer": "No relevant content found in the library.", "chunks": []}

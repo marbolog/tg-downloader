@@ -29,6 +29,7 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
 
     asyncio.create_task(_heal_search_index(db))
     asyncio.create_task(_cleanup_loop(db, retention_days))
+    asyncio.create_task(_heartbeat_loop(db))
 
     channels = db.list_channels()
     log.info(f"Listening -- {len(channels)} subscribed channel(s)")
@@ -160,7 +161,9 @@ async def _heal_search_index(db: Database) -> None:
         return
     log.info(f"Search index heal: {len(missing)} file(s) not yet indexed, indexing in background...")
     from search.indexer import index_file
-    ok = 0
+    indexed = 0
+    textless = 0
+    errors = 0
     for item in missing:
         try:
             result = await asyncio.to_thread(
@@ -168,11 +171,42 @@ async def _heal_search_index(db: Database) -> None:
                 item["media_id"], item["local_path"], item["ext"],
                 item["filename"], item.get("channel_identifier", ""),
             )
+            # True = chunks stored; False = no extractable text (image-only PDF),
+            # already marked processed by index_file so it won't be retried.
             if result:
-                ok += 1
+                indexed += 1
+            else:
+                textless += 1
         except Exception as exc:
+            errors += 1
             log.warning(f"Search heal failed for {item['filename']!r}: {exc}")
-    log.info(f"Search index heal complete: {ok}/{len(missing)} indexed")
+    # Distinguish the three outcomes: a high `textless` count is normal (scanned
+    # magazines); a non-zero `errors` count is the only line worth acting on.
+    log.info(
+        f"Search index heal complete: {indexed} indexed, {textless} no text, "
+        f"{errors} error(s) (of {len(missing)})"
+    )
+
+
+async def _heartbeat_loop(db: Database) -> None:
+    """Log one structured operational summary line every hour. This is the surface
+    an operator scans to answer 'is the listener keeping up / is anything being
+    missed?' without writing SQL: download rate, queue depth, index backlog, and
+    channels that have never produced a message (likely not joined / wrong id)."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            s = db.health_snapshot()
+            log.info(
+                "Heartbeat: "
+                f"downloaded={s['downloaded']} (+{s['downloaded_last_hour']}/h) "
+                f"pending={s['pending']} indexed={s['indexed']} "
+                f"index_pending={s['index_pending']} "
+                f"discarded={s['discarded']} expired={s['expired']} "
+                f"channels_no_messages={s['channels_no_messages']}"
+            )
+        except Exception as exc:
+            log.error(f"Heartbeat error: {exc}", exc_info=True)
 
 
 async def _cleanup_loop(db: Database, retention_days: int) -> None:

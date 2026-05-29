@@ -293,8 +293,37 @@ def cmd_history(db: Database, limit: int) -> None:
     console.print(table)
 
 
-def cmd_scan_languages(db: Database) -> None:
+def _run_file_batch(items: list[dict], description: str, handle) -> int:
+    """Drive a Rich progress bar over `items`, calling handle(item, path) for each
+    item whose local_path exists on disk. Returns the number of items skipped
+    because the file was missing on disk.
+
+    Centralizes the progress-bar boilerplate shared by the scan-* / index
+    maintenance commands; each caller supplies its own per-file work and tallying
+    through the handle closure.
+    """
     from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+
+    missing = 0
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task(description, total=len(items))
+        for item in items:
+            path = Path(item["local_path"]) if item.get("local_path") else None
+            if path is None or not path.exists():
+                missing += 1
+            else:
+                handle(item, path)
+            progress.advance(task)
+    return missing
+
+
+def cmd_scan_languages(db: Database) -> None:
     from lang_filter import DISCARD_LANG, detect_language
 
     items = db.get_untagged_downloaded()
@@ -306,37 +335,22 @@ def cmd_scan_languages(db: Database) -> None:
 
     counts: dict[str, int] = {}
     discarded = 0
-    missing = 0
 
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Detecting languages", total=len(items))
-        for item in items:
-            path = Path(item["local_path"])
-            if not path.exists():
-                missing += 1
-                progress.advance(task)
-                continue
+    def handle(item, path):
+        nonlocal discarded
+        lang = detect_language(path, (item.get("ext") or "").lower())
+        if lang == DISCARD_LANG:
+            path.unlink(missing_ok=True)
+            db.mark_discarded(item["id"])
+            discarded += 1
+            counts["de"] = counts.get("de", 0) + 1
+            log.info(f"Scan-discarded (German): {item['filename']}")
+        else:
+            db.set_language(item["id"], lang)
+            key = lang or "__unknown__"
+            counts[key] = counts.get(key, 0) + 1
 
-            lang = detect_language(path, (item.get("ext") or "").lower())
-
-            if lang == DISCARD_LANG:
-                path.unlink(missing_ok=True)
-                db.mark_discarded(item["id"])
-                discarded += 1
-                counts["de"] = counts.get("de", 0) + 1
-                log.info(f"Scan-discarded (German): {item['filename']}")
-            else:
-                db.set_language(item["id"], lang)
-                key = lang or "__unknown__"
-                counts[key] = counts.get(key, 0) + 1
-
-            progress.advance(task)
+    missing = _run_file_batch(items, "Detecting languages", handle)
 
     table = Table(title="Scan Results")
     table.add_column("Language")
@@ -356,7 +370,6 @@ def cmd_scan_languages(db: Database) -> None:
 
 
 def cmd_scan_topics(db: Database, config: dict) -> None:
-    from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
     from lang_filter import compile_topic_patterns, detect_topic
 
     topic_keywords = config["filters"].get("discard_topics") or {}
@@ -377,34 +390,19 @@ def cmd_scan_topics(db: Database, config: dict) -> None:
     compiled = compile_topic_patterns(topic_keywords)
     counts: dict[str, int] = {}
     discarded = 0
-    missing = 0
 
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Detecting topics", total=len(items))
-        for item in items:
-            path = Path(item["local_path"])
-            if not path.exists():
-                missing += 1
-                progress.advance(task)
-                continue
+    def handle(item, path):
+        nonlocal discarded
+        ext = (item.get("ext") or "").lower()
+        topic = detect_topic(path, ext, topic_keywords, topic_min_matches, topic_min_occurrences, compiled_patterns=compiled)
+        if topic:
+            path.unlink(missing_ok=True)
+            db.mark_discarded(item["id"])
+            discarded += 1
+            counts[topic] = counts.get(topic, 0) + 1
+            log.info(f"Scan-discarded (topic: {topic}): {item['filename']}")
 
-            ext = (item.get("ext") or "").lower()
-            topic = detect_topic(path, ext, topic_keywords, topic_min_matches, topic_min_occurrences, compiled_patterns=compiled)
-
-            if topic:
-                path.unlink(missing_ok=True)
-                db.mark_discarded(item["id"])
-                discarded += 1
-                counts[topic] = counts.get(topic, 0) + 1
-                log.info(f"Scan-discarded (topic: {topic}): {item['filename']}")
-
-            progress.advance(task)
+    missing = _run_file_batch(items, "Detecting topics", handle)
 
     if counts:
         table = Table(title="Scan Results")
@@ -427,7 +425,6 @@ def cmd_scan_topics(db: Database, config: dict) -> None:
 
 
 def cmd_scan_hashes(db: Database) -> None:
-    from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
     from utils import compute_sha256
 
     items = db.get_untagged_for_hash()
@@ -437,31 +434,19 @@ def cmd_scan_hashes(db: Database) -> None:
 
     console.print(f"[dim]Hashing {len(items)} file(s)…[/dim]")
     hashed = 0
-    missing = 0
     errors = 0
 
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Computing SHA-256", total=len(items))
-        for item in items:
-            path = Path(item["local_path"])
-            if not path.exists():
-                missing += 1
-                progress.advance(task)
-                continue
-            try:
-                h = compute_sha256(path)
-                db.set_file_hash(item["id"], h)
-                hashed += 1
-            except Exception as exc:
-                log.warning(f"Hash failed for {item['filename']!r}: {exc}")
-                errors += 1
-            progress.advance(task)
+    def handle(item, path):
+        nonlocal hashed, errors
+        try:
+            h = compute_sha256(path)
+            db.set_file_hash(item["id"], h)
+            hashed += 1
+        except Exception as exc:
+            log.warning(f"Hash failed for {item['filename']!r}: {exc}")
+            errors += 1
+
+    missing = _run_file_batch(items, "Computing SHA-256", handle)
 
     console.print(
         f"\n[green]Done.[/green] {hashed} file(s) hashed, {missing} missing on disk"
@@ -469,20 +454,7 @@ def cmd_scan_hashes(db: Database) -> None:
     )
 
     # Show duplicate groups found
-    import sqlite3 as _sqlite3
-    conn = _sqlite3.connect("data/tg_downloader.db")
-    conn.row_factory = _sqlite3.Row
-    try:
-        dupes = conn.execute("""
-            SELECT file_hash, COUNT(*) AS copies, MIN(filename) AS example
-            FROM media_messages
-            WHERE status = 'downloaded' AND file_hash IS NOT NULL
-            GROUP BY file_hash
-            HAVING copies > 1
-            ORDER BY copies DESC
-        """).fetchall()
-    finally:
-        conn.close()
+    dupes = db.find_duplicate_groups()
 
     if dupes:
         table = Table(title=f"Duplicate Groups ({len(dupes)} found)")
@@ -500,13 +472,17 @@ def cmd_scan_hashes(db: Database) -> None:
 def cmd_index(db: Database, config: dict) -> None:
     from search.indexer import index_file
 
-    missing = db.search_fts_missing_media_ids()
-    if not missing:
-        print("All downloaded files are already indexed.")
+    items = db.search_fts_missing_media_ids()
+    if not items:
+        console.print("[green]All downloaded files are already indexed.[/green]")
         return
-    print(f"Indexing {len(missing)} file(s)...")
-    ok = 0
-    for item in missing:
+
+    console.print(f"[dim]Indexing {len(items)} file(s)…[/dim]")
+    indexed = 0
+    textless = 0
+
+    def handle(item, path):
+        nonlocal indexed, textless
         result = index_file(
             db,
             item["media_id"],
@@ -515,12 +491,20 @@ def cmd_index(db: Database, config: dict) -> None:
             item["filename"],
             item.get("channel_identifier", ""),
         )
+        # index_file returns True when chunks were stored, False when the file
+        # yielded no text (image-only / scanned PDF). Both paths mark the file
+        # indexed_at, so a textless file is not re-attempted on later runs.
         if result:
-            ok += 1
-            print(f"  [ok] {item['filename']}")
+            indexed += 1
         else:
-            print(f"  [skip] {item['filename']}")
-    print(f"Done: {ok}/{len(missing)} indexed.")
+            textless += 1
+
+    missing = _run_file_batch(items, "Indexing", handle)
+
+    console.print(
+        f"\n[green]Done.[/green] {indexed} indexed, {textless} no extractable text, "
+        f"{missing} missing on disk."
+    )
 
 
 async def cmd_ask(db: Database, config: dict, args) -> None:

@@ -6,6 +6,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
 COPY search/ ./search/
+COPY db.py ./
 COPY webui/app.py ./
 COPY webui/static/ ./static/
 

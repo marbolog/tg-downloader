@@ -35,7 +35,14 @@ def _chunk_pdf(path: Path) -> list[dict]:
     try:
         chunks = []
         for page_num in range(doc.page_count):
-            text = doc[page_num].get_text().strip()
+            # Extract per page in isolation: malformed PDFs (e.g. "malformed page
+            # tree") raise on a single page. Skip the bad page rather than abort
+            # the whole document, so partial text is still indexed and a fully
+            # broken file returns [] (caller marks it processed, no endless retry).
+            try:
+                text = doc[page_num].get_text().strip()
+            except Exception:
+                continue
             if not text:
                 continue
             chunks.append({

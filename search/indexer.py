@@ -28,7 +28,11 @@ def index_file(
         return False
     chunks = chunk_file(path, ext)
     if not chunks:
-        log.debug(f"index_file: no chunks extracted from {filename}")
+        # Image-only / scanned PDF (no text layer) or unparseable file. Mark it
+        # processed so the startup heal stops re-attempting it on every restart.
+        # There is nothing to add to the search index.
+        log.debug(f"index_file: no chunks extracted from {filename}; marking processed")
+        db.mark_indexed(media_id)
         return False
     db.search_fts_index_file(
         media_id=media_id,
@@ -36,5 +40,6 @@ def index_file(
         filename=filename,
         channel_identifier=channel_identifier,
     )
+    db.mark_indexed(media_id)
     log.info(f"Indexed {len(chunks)} chunk(s) for {filename!r} (media_id={media_id})")
     return True

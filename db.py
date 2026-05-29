@@ -273,25 +273,21 @@ class Database:
     def search_fts_query(
         self, q: str, top_k: int = 8, channel_identifier: str = ""
     ) -> list[dict]:
+        """BM25-ranked FTS5 search. Single source of truth for the search query
+        used by the CLI (`ask`) and the web UI (`/api/search`, `/api/ask`)."""
+        select = """SELECT media_id, filename, page, chapter, channel_identifier,
+                           snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
+                    FROM search_fts
+                    WHERE search_fts MATCH ?"""
         with self._conn() as conn:
             if channel_identifier:
                 rows = conn.execute(
-                    """SELECT media_id, filename, page, chapter,
-                              snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
-                       FROM search_fts
-                       WHERE search_fts MATCH ? AND channel_identifier = ?
-                       ORDER BY rank
-                       LIMIT ?""",
+                    select + " AND channel_identifier = ? ORDER BY rank LIMIT ?",
                     (q, channel_identifier, top_k),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """SELECT media_id, filename, page, chapter,
-                              snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
-                       FROM search_fts
-                       WHERE search_fts MATCH ?
-                       ORDER BY rank
-                       LIMIT ?""",
+                    select + " ORDER BY rank LIMIT ?",
                     (q, top_k),
                 ).fetchall()
             return [
@@ -300,6 +296,7 @@ class Database:
                     "filename": r["filename"],
                     "page": r["page"],
                     "chapter": r["chapter"],
+                    "channel_identifier": r["channel_identifier"],
                     "text": r["text"],
                 }
                 for r in rows
@@ -314,11 +311,130 @@ class Database:
                    JOIN channels c ON m.channel_id = c.id
                    WHERE m.status = 'downloaded'
                      AND m.ext IN ('pdf', 'epub')
+                     AND m.indexed_at IS NULL
                      AND CAST(m.id AS TEXT) NOT IN (
                          SELECT DISTINCT media_id FROM search_fts
                      )"""
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # --- web UI read queries (also used by host-side tools) ---
+
+    def get_media(self, media_id: int) -> dict | None:
+        """Single media row joined with its channel, by id."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT m.*, c.title AS channel_title, c.identifier AS channel_identifier
+                   FROM media_messages m
+                   JOIN channels c ON m.channel_id = c.id
+                   WHERE m.id = ?""",
+                (media_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_downloaded_files(
+        self, channel: str = "", language: str = "", ids: list[int] | None = None
+    ) -> list[dict]:
+        """Downloaded files for the web UI grid, newest first. Optional filters by
+        channel identifier, language (use '__unknown__' for NULL), and explicit id
+        list. Deduplication is applied by the caller (presentation concern)."""
+        where = ["m.status = 'downloaded'"]
+        params: list = []
+        if channel:
+            where.append("c.identifier = ?")
+            params.append(channel)
+        if language == "__unknown__":
+            where.append("m.language IS NULL")
+        elif language:
+            where.append("m.language = ?")
+            params.append(language)
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            where.append(f"m.id IN ({placeholders})")
+            params.extend(ids)
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""SELECT m.id, m.filename, m.size, m.ext, m.date, m.downloaded_at,
+                           m.local_path, m.language, m.file_hash,
+                           c.title AS channel_title, c.identifier AS channel_identifier
+                    FROM media_messages m
+                    JOIN channels c ON m.channel_id = c.id
+                    WHERE {' AND '.join(where)}
+                    ORDER BY m.downloaded_at DESC NULLS LAST, m.date DESC""",
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def language_counts(self) -> list[dict]:
+        """Counts of downloaded files per language (NULL → '__unknown__')."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT COALESCE(m.language, '__unknown__') AS language, COUNT(*) AS count
+                   FROM media_messages m
+                   WHERE m.status = 'downloaded'
+                   GROUP BY m.language
+                   HAVING count > 0
+                   ORDER BY count DESC"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def channel_counts(self) -> list[dict]:
+        """Per-channel downloaded-file counts, channels with at least one file."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT c.identifier, c.title,
+                          SUM(CASE WHEN m.status='downloaded' THEN 1 ELSE 0 END) AS count
+                   FROM channels c
+                   LEFT JOIN media_messages m ON m.channel_id = c.id
+                   GROUP BY c.id
+                   HAVING count > 0
+                   ORDER BY c.title"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def find_duplicate_groups(self) -> list[dict]:
+        """Groups of downloaded files sharing a SHA-256 hash, most copies first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT file_hash, COUNT(*) AS copies, MIN(filename) AS example
+                   FROM media_messages
+                   WHERE status = 'downloaded' AND file_hash IS NOT NULL
+                   GROUP BY file_hash
+                   HAVING copies > 1
+                   ORDER BY copies DESC"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def health_snapshot(self) -> dict:
+        """One-row operational summary for the hourly heartbeat log. Cheap
+        aggregate queries — the numbers an operator needs to tell at a glance
+        whether the listener is keeping up or something is being missed."""
+        with self._conn() as conn:
+            def scalar(sql: str, params=()) -> int:
+                return conn.execute(sql, params).fetchone()[0]
+
+            return {
+                "downloaded": scalar("SELECT COUNT(*) FROM media_messages WHERE status='downloaded'"),
+                "pending": scalar("SELECT COUNT(*) FROM media_messages WHERE status='pending'"),
+                "downloaded_last_hour": scalar(
+                    "SELECT COUNT(*) FROM media_messages "
+                    "WHERE status='downloaded' AND downloaded_at >= datetime('now', '-1 hour')"
+                ),
+                "discarded": scalar("SELECT COUNT(*) FROM media_messages WHERE status='discarded'"),
+                "expired": scalar("SELECT COUNT(*) FROM media_messages WHERE status='expired'"),
+                "indexed": scalar("SELECT COUNT(DISTINCT media_id) FROM search_fts"),
+                "index_pending": scalar(
+                    "SELECT COUNT(*) FROM media_messages m "
+                    "WHERE m.status='downloaded' AND m.ext IN ('pdf','epub') "
+                    "AND m.indexed_at IS NULL "
+                    "AND CAST(m.id AS TEXT) NOT IN (SELECT DISTINCT media_id FROM search_fts)"
+                ),
+                "channels_no_messages": scalar(
+                    "SELECT COUNT(*) FROM channels c "
+                    "WHERE NOT EXISTS (SELECT 1 FROM media_messages m WHERE m.channel_id = c.id)"
+                ),
+            }
 
     def get_status_counts(self) -> list[dict]:
         """Returns per-channel counts of each status and total."""

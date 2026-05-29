@@ -61,6 +61,7 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 ### Stack
 - **Python 3.11**, managed by **uv** (`pyproject.toml` + `uv.lock`)
 - **Telethon** — MTProto Telegram client (user account, not bot)
+- **cryptg** — C extension giving Telethon AES-NI hardware crypto (avoids pure-Python AES pegging ARM cores on the Pi). No code references it; Telethon auto-detects it at import.
 - **InquirerPy** — interactive checkbox file selection in the terminal
 - **rich** — tables, styled output
 - **PyYAML** — config file
@@ -93,7 +94,7 @@ uv run python main.py <command>
 | `utils.py` | Pure helpers: `human_size`, `unique_path` |
 | `tgdctl.py` | Host-side management CLI; wraps docker compose + proxies app commands |
 | `config.yaml.example` | Template config — copy to `config.yaml` to start |
-| `webui/app.py` | FastAPI web UI — file grid with cover previews, discard, download |
+| `webui/app.py` | FastAPI web UI — file grid with cover previews, discard, download. Uses the shared `Database` class (not raw SQL); the Dockerfile copies `db.py` into the image. All SQL lives in `db.py`. |
 | `webui/static/index.html` | Single-page app (vanilla JS, all inline) |
 | `webui/Dockerfile` | Separate image for the web UI service |
 | `search/chunker.py` | Text extraction + chunking for PDF (per-page) and EPUB (per-chapter) |
@@ -164,6 +165,7 @@ Full-text search and AI Q&A over the downloaded library. Always enabled — zero
 - Auto-indexed after each download; run `tgdctl index` to index existing files retroactively
 - On `listen` startup, any `downloaded` file missing from `search_fts` is indexed in the background (startup heal)
 - Only `pdf` and `epub` are indexed; other formats are skipped silently
+- `index_file` sets `media_messages.indexed_at` after every completed attempt — including image-only/scanned PDFs that yield no text (no chunks). `search_fts_missing_media_ids()` excludes any row with `indexed_at IS NOT NULL`, so the startup heal does not re-scan textless PDFs on every restart (previously it re-attempted them forever, e.g. ~569 image PDFs taking ~6 min each boot). Files that *raise* during PDF parsing (e.g. "malformed page tree") still fall through unmarked and will retry — minor, low-volume.
 - Web UI exposes `GET /api/search?q=` (FTS5) and `POST /api/ask` (Claude API streaming)
 - If `ANTHROPIC_API_KEY` is absent, `/api/search` still works; `/api/ask` returns HTTP 503
 
@@ -188,6 +190,9 @@ On each `listen` startup the listener:
 3. **Backfills gaps** — for each channel, finds the highest recorded `message_id` and fetches everything newer from Telegram, then downloads it. Only runs if at least one message was previously recorded for that channel (no reference point = skip; use `scrape` for initial history).
 4. **Real-time** — downloads new messages immediately as they arrive via `asyncio.create_task`.
 5. **Retention cleanup** — runs once on startup then every hour; deletes files older than `download.retention_days` days (set to 0 to disable). Default is 365 days.
+6. **Heartbeat** — `_heartbeat_loop` logs one operational summary line every hour (`db.health_snapshot()`): `downloaded`, `+N/h`, `pending`, `indexed`, `index_pending`, `discarded`, `expired`, `channels_no_messages`. This is the at-a-glance "is anything being missed?" surface. `channels_no_messages > 0` flags channels that have never produced a message (not joined / wrong identifier / files delivered via bot/button instead of attachments).
+
+The four batch-maintenance commands (`scan-languages`, `scan-topics`, `scan-hashes`, `index`) share the `_run_file_batch(items, description, handle)` helper in `main.py` for the Rich progress-bar loop and missing-on-disk handling; each command supplies only its query, per-file `handle` closure, and summary.
 
 Concurrency is controlled by `download.concurrent_downloads` in `config.yaml` (default: 1). The listener constructs the `asyncio.Semaphore` from this value and passes it into `download_item`. Raise to 3 on faster connections; keep at 1 on Raspberry Pi — each concurrent download runs Telethon's MTProto crypto in software AES, which pegs ARM cores and spins the fan under sustained backfill load. The SHA-256 hash step runs via `asyncio.to_thread` so disk I/O doesn't block the event loop when concurrency > 1.
 
