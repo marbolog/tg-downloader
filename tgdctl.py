@@ -268,7 +268,7 @@ app commands (proxied into the running container):
   channels                List subscribed channels
   discard                 Review downloaded files and delete unwanted ones
   history                 Show recently downloaded files
-  scrape [--channel X] [--limit N] [--since DATE]  Backfill media from history (pauses listener briefly)
+  scrape [--channel X] [--limit N] [--since DATE] [--dry-run]  Find/recover media missing from the DB (pauses listener briefly; --dry-run audits only)
   scan-languages              Detect language for untagged files; discard German ones
   scan-topics                 Apply topic filters from config to downloaded files; discard matches
   scan-hashes                 Compute SHA-256 hashes for files; enables duplicate detection in web UI
@@ -304,6 +304,7 @@ app commands (proxied into the running container):
     p.add_argument("--channel", metavar="IDENTIFIER", default=None)
     p.add_argument("--limit", type=int, default=None, metavar="N")
     p.add_argument("--since", metavar="YYYY-MM-DD", default=None)
+    p.add_argument("--dry-run", action="store_true")
 
     sub.add_parser("scan-languages")
     sub.add_parser("scan-topics")
@@ -352,6 +353,10 @@ app commands (proxied into the running container):
             extra += ["--channel", args.channel]
         if args.since:
             extra += ["--since", args.since]
+        if args.dry_run:
+            extra += ["--dry-run"]
+        # Even a dry-run audit must hold the Telegram session, so the listener is
+        # paused for it too; nothing is written to the DB in that mode.
         sys.exit(run_with_restart("scrape", *extra))
     elif args.command == "scan-languages":
         sys.exit(app("scan-languages"))

@@ -30,6 +30,14 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     asyncio.create_task(_heal_search_index(db))
     asyncio.create_task(_cleanup_loop(db, retention_days))
     asyncio.create_task(_heartbeat_loop(db))
+    asyncio.create_task(_backfill_loop(
+        client, db, allowed, destination, semaphore,
+        topic_keywords, topic_min_matches, topic_min_occurrences,
+    ))
+    asyncio.create_task(_deep_reconcile_loop(
+        client, db, allowed, destination, semaphore,
+        topic_keywords, topic_min_matches, topic_min_occurrences,
+    ))
 
     channels = db.list_channels()
     log.info(f"Listening -- {len(channels)} subscribed channel(s)")
@@ -42,6 +50,10 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
             await _handle(event, db, allowed, client, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences)
         except Exception as exc:
             log.error(f"Error handling message {event.message.id}: {exc}", exc_info=True)
+
+    # Catch up on anything that arrived while we were offline / mid-reconnect.
+    # Must run after the handler above is registered so loaded updates are processed.
+    await client.catch_up()
 
     log.info("Waiting for new messages. Use Ctrl+C to stop.")
     await client.run_until_disconnected()
@@ -92,16 +104,23 @@ async def _heal_missing(
 
 
 async def _backfill_missed(
-    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches,
+    topic_min_occurrences, warn_empty: bool = True
 ) -> None:
-    """Fetch messages that arrived while the service was down and download them."""
+    """Fetch messages that arrived while the service was down and download them.
+
+    `warn_empty` controls the per-channel "no prior messages" warning: useful once
+    at startup, but suppressed by the hourly safety-net loop so known-empty
+    channels don't emit the same warning every hour (the heartbeat already
+    surfaces `channels_no_messages`)."""
     for ch in db.list_channels():
         max_id = db.get_max_message_id(ch["id"])
         if max_id is None:
-            log.warning(
-                f"Backfill: no prior messages recorded for {ch['title']!r} -- "
-                f"run 'scrape --channel {ch['identifier']}' to pull existing history"
-            )
+            if warn_empty:
+                log.warning(
+                    f"Backfill: no prior messages recorded for {ch['title']!r} -- "
+                    f"run 'scrape --channel {ch['identifier']}' to pull existing history"
+                )
             continue
 
         try:
@@ -207,6 +226,115 @@ async def _heartbeat_loop(db: Database) -> None:
             )
         except Exception as exc:
             log.error(f"Heartbeat error: {exc}", exc_info=True)
+
+
+async def _backfill_loop(
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences
+) -> None:
+    """Re-run backfill every hour as a safety net against silent update-stream
+    stalls. Telethon's real-time update channel can go stale after a network blip
+    while the TCP connection (and this asyncio loop) stays alive -- the process
+    keeps logging heartbeats but no `events.NewMessage` ever fires, so downloads
+    silently stop until the next restart. Polling each channel for messages newer
+    than the last recorded id closes that gap within the hour, independent of why
+    real-time delivery stopped. Harmless when real-time is healthy: `min_id` is
+    already current, so nothing new is fetched and no message is double-downloaded
+    (save_media_message dedups on message_id)."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            await _backfill_missed(
+                client, db, allowed, dest, semaphore,
+                topic_keywords, topic_min_matches, topic_min_occurrences,
+                warn_empty=False,
+            )
+        except Exception as exc:
+            log.error(f"Periodic backfill error: {exc}", exc_info=True)
+
+
+# How many recent messages per channel the deep-reconcile pass re-examines, and
+# how often. The hourly backfill only fetches ids *newer* than the highest one
+# recorded, so a file dropped mid-burst (while a higher id from the same burst
+# landed) is permanently below that watermark. This pass re-walks a fixed recent
+# window with no watermark and lets save_media_message's dedup insert only the
+# genuinely-missing ids -- closing that hole for recent drops without the cost of
+# scanning full history. Older holes are recovered manually with `scrape`.
+RECONCILE_WINDOW = 400
+RECONCILE_INTERVAL_SECONDS = 86400  # daily
+
+
+async def _deep_reconcile_loop(
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences
+) -> None:
+    """Once a day, re-scan each channel's recent window ignoring the backfill
+    watermark, recovering media that real-time delivery dropped mid-burst."""
+    while True:
+        await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
+        try:
+            await _deep_reconcile(
+                client, db, allowed, dest, semaphore,
+                topic_keywords, topic_min_matches, topic_min_occurrences,
+            )
+        except Exception as exc:
+            log.error(f"Deep reconcile error: {exc}", exc_info=True)
+
+
+async def _deep_reconcile(
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences
+) -> None:
+    for ch in db.list_channels():
+        recorded = db.get_recorded_message_ids(ch["id"])
+        if not recorded:
+            continue  # never seen this channel — that's `scrape`'s job, not reconcile's
+        try:
+            entity = await client.get_entity(ch["identifier"])
+        except Exception as exc:
+            log.warning(f"Deep reconcile: cannot resolve {ch['identifier']!r}: {exc}")
+            continue
+
+        tasks = []
+        async for message in client.iter_messages(entity, limit=RECONCILE_WINDOW):
+            if not message.media or message.id in recorded:
+                continue
+            item_meta = _extract_media(message)
+            if item_meta is None:
+                continue
+            if allowed and item_meta["ext"] not in allowed:
+                continue
+            db_id = db.save_media_message(
+                channel_id=ch["id"],
+                message_id=message.id,
+                filename=item_meta["filename"],
+                size=item_meta["size"],
+                mime_type=item_meta["mime_type"],
+                ext=item_meta["ext"],
+                date=message.date.isoformat(),
+                caption=(message.message or "")[:120],
+            )
+            if db_id:
+                tasks.append(download_item(
+                    client, db,
+                    {
+                        "id": db_id,
+                        "channel_identifier": ch["identifier"],
+                        "channel_telegram_id": ch["telegram_id"],
+                        "channel_title": ch["title"],
+                        "message_id": message.id,
+                        "filename": item_meta["filename"],
+                        "size": item_meta["size"],
+                        "ext": item_meta["ext"],
+                    },
+                    dest, semaphore, message=message,
+                    topic_keywords=topic_keywords,
+                    topic_min_matches=topic_min_matches,
+                    topic_min_occurrences=topic_min_occurrences,
+                ))
+
+        if tasks:
+            log.info(f"Deep reconcile: recovered {len(tasks)} mid-burst miss(es) from {ch['title']}")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            ok = sum(1 for r in results if r is True)
+            log.info(f"Deep reconcile {ch['title']}: {ok}/{len(tasks)} downloaded")
 
 
 async def _cleanup_loop(db: Database, retention_days: int) -> None:

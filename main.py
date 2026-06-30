@@ -85,10 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("history", help="Show recently downloaded files")
     p.add_argument("--limit", type=int, default=20, metavar="N", help="Number of entries (default: 20)")
 
-    p = sub.add_parser("scrape", help="Backfill media from channel history into the pending queue")
+    p = sub.add_parser("scrape", help="Scan channel history for media missing from the DB; queue it for download")
     p.add_argument("--channel", metavar="IDENTIFIER", default=None, help="Specific channel (default: all)")
     p.add_argument("--limit", type=int, default=None, metavar="N", help="Max messages to scan per channel (default: unlimited)")
     p.add_argument("--since", metavar="YYYY-MM-DD", default=None, help="Stop at messages older than this date")
+    p.add_argument("--dry-run", action="store_true", help="Audit only: report missed files per channel without queueing anything")
 
     sub.add_parser("scan-languages", help="Retroactively detect language for untagged downloaded files; auto-discard German ones")
 
@@ -162,7 +163,11 @@ async def run(args) -> None:
 
     tg = config["telegram"]
     session = _load_session(tg["session_file"])
-    client = TelegramClient(session, tg["api_id"], tg["api_hash"])
+    # catch_up=True makes Telethon fetch updates missed during any reconnect, so a
+    # network blip doesn't silently drop a batch of messages. Paired with the
+    # hourly _backfill_loop safety net in listener.py for stalls where the socket
+    # never actually drops.
+    client = TelegramClient(session, tg["api_id"], tg["api_hash"], catch_up=True)
     await client.start()
     # Persist session immediately — migrates legacy SQLite session to StringSession
     # so subsequent runs never touch the SQLite session file again.
@@ -177,7 +182,7 @@ async def run(args) -> None:
             await cmd_subscribe(client, db, args.channel)
 
         elif args.command == "scrape":
-            await cmd_scrape(client, db, config, args.channel, args.limit, args.since)
+            await cmd_scrape(client, db, config, args.channel, args.limit, args.since, args.dry_run)
     finally:
         _save_session(client, tg["session_file"])
         await client.disconnect()
@@ -548,7 +553,20 @@ async def cmd_scrape(
     identifier: str | None,
     limit: int | None,
     since: str | None,
+    dry_run: bool = False,
 ) -> None:
+    """Full-history scan that finds media on Telegram missing from the DB.
+
+    Unlike the listener's hourly backfill (anchored at MAX(message_id), so it can
+    only ever see *newer* messages), this walks the channel's whole history and
+    diffs every media id against everything already recorded. That makes it the
+    only path that recovers a file dropped *mid-burst* by real-time delivery while
+    a higher id from the same burst was recorded -- such a file sits permanently
+    below the backfill watermark.
+
+    dry_run=True audits only: it reports the confirmed-missed count per channel and
+    a sample of filenames, writing nothing. Without it, missing media is queued as
+    `pending` and downloaded when the listener next starts (`_flush_pending`)."""
     from datetime import datetime, timezone
     from listener import _extract_media
 
@@ -564,6 +582,8 @@ async def cmd_scrape(
         since_dt = datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
 
     allowed = set(config["filters"]["extensions"])
+    mode = "[yellow]AUDIT (dry-run, no changes)[/yellow]" if dry_run else "recover"
+    console.print(f"Scrape mode: {mode}\n")
     total_new = 0
 
     for ch in channels:
@@ -574,6 +594,11 @@ async def cmd_scrape(
         except Exception as exc:
             console.print(f"[red]Cannot resolve {ch['identifier']!r}: {exc} — skipping[/red]")
             continue
+
+        # Snapshot of every id we already know about (any status) so a file the
+        # language/topic filter already discarded isn't reported as "missed".
+        recorded = db.get_recorded_message_ids(ch["id"])
+        missing_samples: list[str] = []
         count = 0
         scanned = 0
         async for message in client.iter_messages(entity, limit=limit):
@@ -587,25 +612,41 @@ async def cmd_scrape(
                 continue
             if allowed and item["ext"] not in allowed:
                 continue
-            inserted = db.save_media_message(
-                channel_id=ch["id"],
-                message_id=message.id,
-                filename=item["filename"],
-                size=item["size"],
-                mime_type=item["mime_type"],
-                ext=item["ext"],
-                date=message.date.isoformat(),
-                caption=(message.message or "")[:120],
-            )
-            if inserted:
-                count += 1
-        console.print(f"  [green]+{count} new item(s)[/green] ({scanned} messages scanned)")
+            if message.id in recorded:
+                continue
+            count += 1
+            if len(missing_samples) < 5:
+                missing_samples.append(item["filename"])
+            if not dry_run:
+                db.save_media_message(
+                    channel_id=ch["id"],
+                    message_id=message.id,
+                    filename=item["filename"],
+                    size=item["size"],
+                    mime_type=item["mime_type"],
+                    ext=item["ext"],
+                    date=message.date.isoformat(),
+                    caption=(message.message or "")[:120],
+                )
+
+        colour = "yellow" if count else "green"
+        console.print(f"  [{colour}]{count} missed file(s)[/{colour}] ({scanned} messages scanned)")
+        for fn in missing_samples:
+            console.print(f"      [dim]· {fn}[/dim]")
+        if count > len(missing_samples):
+            console.print(f"      [dim]… and {count - len(missing_samples)} more[/dim]")
         total_new += count
 
-    console.print(
-        f"\n[green]Done — {total_new} new item(s) queued. "
-        f"Will be downloaded when the listener next starts.[/green]"
-    )
+    if dry_run:
+        console.print(
+            f"\n[yellow]Audit complete — {total_new} missed file(s) found across "
+            f"{len(channels)} channel(s). Re-run without --dry-run to recover them.[/yellow]"
+        )
+    else:
+        console.print(
+            f"\n[green]Done — {total_new} missed file(s) queued. "
+            f"Will be downloaded when the listener next starts.[/green]"
+        )
 
 
 def main() -> None:

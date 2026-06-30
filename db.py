@@ -166,6 +166,19 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_recorded_message_ids(self, channel_id: int) -> set[int]:
+        """Every message_id ever recorded for a channel, regardless of status.
+
+        Used by `scrape` to detect media that exists on Telegram but never made it
+        into the DB -- the fingerprint of a real-time update dropped mid-burst,
+        which the hourly backfill (anchored at MAX(message_id)) can never recover."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT message_id FROM media_messages WHERE channel_id = ?",
+                (channel_id,),
+            ).fetchall()
+            return {r["message_id"] for r in rows}
+
     def get_max_message_id(self, channel_id: int) -> int | None:
         """Returns the highest recorded message_id for a channel, or None if none exist."""
         with self._conn() as conn:
