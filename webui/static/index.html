@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TG Files — Review</title>
+<link rel="stylesheet" href="/reader.css">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -483,8 +484,16 @@ function _renderRagResults(chunks, container, answer) {
 
     const viewBtn = document.createElement('button');
     viewBtn.className = 'btn rag-group-header-view';
-    viewBtn.textContent = '↗ View';
-    viewBtn.onclick = () => viewCard(group.mediaId);
+    // PDF hits carry a page number → open the reader at that page; EPUB hits
+    // (chapter, no page) fall back to scrolling the grid to the card.
+    const hitPage = group.chunks.map(c => c.page).find(p => p != null);
+    if (hitPage != null) {
+      viewBtn.textContent = '📖 Read p.' + hitPage;
+      viewBtn.onclick = () => window.openReader(group.mediaId, { page: hitPage, filename: group.filename });
+    } else {
+      viewBtn.textContent = '↗ View';
+      viewBtn.onclick = () => viewCard(group.mediaId);
+    }
     header.appendChild(viewBtn);
     groupDiv.appendChild(header);
 
@@ -671,6 +680,14 @@ function makeCard(f) {
   const chan = document.createElement('div'); chan.className = 'info-channel'; chan.title = f.channel_title || ''; chan.textContent = f.channel_title || '';
   const meta = document.createElement('div'); meta.className = 'info-meta'; meta.textContent = size + (date ? ' · ' + date : '');
   const dl   = document.createElement('a');   dl.className   = 'btn-dl'; dl.href = `/api/download/${f.id}`; dl.textContent = '⬇ Download'; dl.download = ''; dl.addEventListener('click', e => e.stopPropagation());
+  // PDFs get an in-browser Read button (the reader is PDF-only by design).
+  let read = null;
+  if (ext === 'pdf') {
+    read = document.createElement('button');
+    read.className = 'btn-read';
+    read.textContent = '📖 Read';
+    read.addEventListener('click', e => { e.stopPropagation(); window.openReader(f.id, { filename: f.filename }); });
+  }
   info.appendChild(name); info.appendChild(chan);
   const badges = document.createElement('div');
   badges.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;margin-top:2px;';
@@ -688,12 +705,14 @@ function makeCard(f) {
     badges.appendChild(dupeBadge);
   }
   if (badges.firstChild) info.appendChild(badges);
-  info.appendChild(meta); info.appendChild(dl);
+  info.appendChild(meta);
+  if (read) info.appendChild(read);
+  info.appendChild(dl);
 
   card.appendChild(cover); card.appendChild(info);
 
   thumbObs.observe(img);
-  card.addEventListener('click', e => { if (!e.target.closest('.btn-dl')) toggleCard(f.id, card); });
+  card.addEventListener('click', e => { if (!e.target.closest('.btn-dl') && !e.target.closest('.btn-read')) toggleCard(f.id, card); });
   return card;
 }
 
@@ -800,5 +819,6 @@ const EXT_ICON = {
 
 init();
 </script>
+<script type="module" src="/reader.js"></script>
 </body>
 </html>

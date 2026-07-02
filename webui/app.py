@@ -183,6 +183,29 @@ def download_file(file_id: int):
     )
 
 
+@app.get("/api/pdf/{file_id}")
+def view_pdf(file_id: int):
+    """Serve a PDF **inline** for the in-browser reader (reader.js / pdf.js).
+
+    Unlike /api/download (which forces a save), this sets Content-Disposition:
+    inline so the browser renders it. FileResponse honors HTTP Range requests, so
+    pdf.js streams large magazines progressively instead of fetching the whole
+    file. PDF-only by design — the reader is never opened on other formats."""
+    row = db.get_media(file_id)
+    if not row or not row["local_path"] or (row["ext"] or "").lower() != "pdf":
+        raise HTTPException(status_code=404)
+
+    path = Path(row["local_path"])
+    if not path.exists():
+        raise HTTPException(status_code=404)
+
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{row["filename"]}"'},
+    )
+
+
 @app.get("/api/search")
 def fts_search(q: str, channel: str = "", top_k: int = 0):
     if not q.strip():
