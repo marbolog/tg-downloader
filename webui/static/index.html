@@ -760,18 +760,16 @@ async function deleteSelected() {
     }).then(r => r.json());
 
     toast(`Deleted ${r.deleted} of ${r.total} file${r.total > 1 ? 's' : ''}`);
-    ids.forEach(id => document.querySelector(`.card[data-id="${id}"]`)?.remove());
-    S.files  = S.files.filter(f => !ids.includes(f.id));
-    S.total -= ids.length;
     S.selected.clear();
 
-    const meta  = document.getElementById('grid-meta');
-    const start = (S.page - 1) * S.perPage + 1;
-    const end   = start + S.files.length - 1;
-    meta.textContent = S.files.length ? `Showing ${start}–${end} of ${S.total.toLocaleString()} files` : '';
-    if (!S.files.length) load();
-    renderPagination();
-    syncUI();
+    // Re-fetch from the server instead of patching the DOM locally: deleting
+    // fewer items than a full page used to leave the grid under-filled (the
+    // next page's items never slide up) until the user navigated away and
+    // back, so pagination and content drifted out of sync. Clamp the page
+    // first in case this delete emptied the current (e.g. last) page.
+    const newTotal = Math.max(0, S.total - r.deleted);
+    S.page = Math.min(S.page, Math.max(1, Math.ceil(newTotal / S.perPage)));
+    load();
   } catch { toast('Delete failed — check server logs'); }
 }
 
