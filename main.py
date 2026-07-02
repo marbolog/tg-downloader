@@ -99,15 +99,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("index", help="Index downloaded files into the RAG vector store")
 
-    p = sub.add_parser("ask", help="Query the RAG index with a natural language question")
-    p.add_argument("query", help="Natural language question")
-    p.add_argument("--sources-only", action="store_true",
-                   help="Show matching sources only, skip AI generation")
-    p.add_argument("--top-k", type=int, default=None, metavar="N",
-                   help="Number of chunks to retrieve (default: from config)")
-    p.add_argument("--channel", metavar="IDENTIFIER", default=None,
-                   help="Restrict search to one channel")
-
     return parser
 
 
@@ -139,9 +130,6 @@ async def run(args) -> None:
         return
     if args.command == "index":
         cmd_index(db, config)
-        return
-    if args.command == "ask":
-        await cmd_ask(db, config, args)
         return
     if args.command == "discard":
         from ui import select_discard
@@ -510,40 +498,6 @@ def cmd_index(db: Database, config: dict) -> None:
         f"\n[green]Done.[/green] {indexed} indexed, {textless} no extractable text, "
         f"{missing} missing on disk."
     )
-
-
-async def cmd_ask(db: Database, config: dict, args) -> None:
-    import os
-
-    top_k = config.get("search", {}).get("top_k", 8)
-    if args.top_k is not None:
-        top_k = args.top_k
-
-    channel = getattr(args, "channel", "") or ""
-    if args.sources_only:
-        chunks = db.search_fts_query(args.query, top_k=top_k, channel_identifier=channel)
-        if not chunks:
-            print("No relevant content found.")
-            return
-        for i, c in enumerate(chunks, 1):
-            loc = f"p.{c['page']}" if c.get("page") else c.get("chapter", "")
-            print(f"[{i}] {c['filename']} ({loc})")
-            print(f"    {c['text'][:200]}")
-        return
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY environment variable not set.")
-        return
-    chunks = db.search_fts_query(args.query, top_k=top_k, channel_identifier=channel)
-    if not chunks:
-        print("No relevant content found in the library.")
-        return
-
-    from search.generator import generate
-    async for token in generate(args.query, chunks, api_key):
-        print(token, end="", flush=True)
-    print()
 
 
 async def cmd_scrape(

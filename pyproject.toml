@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Scrape Telegram channels for media files and interactively select which ones to download"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40",
     # cryptg: C extension giving Telethon AES-NI hardware crypto for MTProto.
     # Without it Telethon falls back to pure-Python AES, which pegs ARM cores
     # (Raspberry Pi) under sustained download/backfill load.

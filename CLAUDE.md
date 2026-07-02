@@ -69,7 +69,6 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 - **PyMuPDF** — PDF cover thumbnail extraction (webui) + text extraction for language detection (main app)
 - **Pillow** — image resizing for thumbnails
 - **langdetect** — language detection for automatic German-content filtering
-- **anthropic** — Claude API client for AI Q&A generation (Ask AI feature in web UI + CLI)
 - **httpx** — async HTTP client
 
 ### Entry points
@@ -99,20 +98,14 @@ uv run python main.py <command>
 | `webui/Dockerfile` | Separate image for the web UI service |
 | `search/chunker.py` | Text extraction + chunking for PDF (per-page) and EPUB (per-chapter) |
 | `search/indexer.py` | FTS5 insert / delete / query / is_indexed helpers |
-| `search/generator.py` | Claude Haiku streaming generation via Anthropic API |
 
 ### Setup (Docker — recommended)
 1. Copy `config.yaml.example` → `config.yaml`; fill in `api_id`, `api_hash`
 2. `mkdir -p data/downloads`
-3. Create `.env` in the project root with your Anthropic API key (required for Ask AI):
-   ```
-   ANTHROPIC_API_KEY=sk-ant-...
-   ```
-   The `.env` file is gitignored and read automatically by docker compose.
-4. First-time Telegram auth (interactive — phone + OTP):
+3. First-time Telegram auth (interactive — phone + OTP):
    `sudo docker compose run --rm -it tg-downloader uv run python main.py listen`
    Session is saved to `data/tg_session.session` and reused on subsequent runs. Ctrl+C once authenticated.
-5. `sudo docker compose up -d --build` — builds image, starts listener as main process with `restart: always`
+4. `sudo docker compose up -d --build` — builds image, starts listener as main process with `restart: always`
 
 ### Usage (Docker)
 Use `tgdctl` — the host-side management wrapper:
@@ -136,8 +129,6 @@ uv run tgdctl scan-languages         # retroactively detect language for untagge
 uv run tgdctl scan-topics            # retroactively apply topic filters to downloaded files; discard matches
 uv run tgdctl scan-hashes            # compute SHA-256 for all downloaded files; enables duplicate detection in web UI
 uv run tgdctl index                  # index all downloaded files into the FTS5 search table
-uv run tgdctl ask "query"            # ask a natural language question about your library (streams via Claude API)
-uv run tgdctl ask "query" --sources-only  # show matching sources without AI generation
 ```
 Downloaded files appear in `./data/downloads/` on the host.
 
@@ -159,18 +150,16 @@ Features:
 - Thumbnails are cached in `data/thumbs/` and generated on first request
 - **In-browser PDF reader** — click "📖 Read" on any PDF card (or a paged search hit) to open a full-screen reader instead of downloading. Mobile-first: continuous vertical scroll with lazy per-page canvas rendering (`IntersectionObserver`), fit-width zoom (buttons + pinch), `#page=N` / search-result deep links, and a manual region-crop tool to isolate a single article (works on scanned PDFs too, since it operates on rendered pixels, not text). Backend: `GET /api/pdf/{id}` serves the file inline (`Content-Disposition: inline`) with HTTP Range support via `FileResponse`, so large magazines stream progressively; 404s if the row is missing, the file isn't on disk, or `ext != 'pdf'`. Frontend: `webui/static/reader.js` (single entry point `window.openReader(mediaId, { page })`) + `webui/static/reader.css`, built on **pdf.js 6.1.200** vendored at `webui/static/vendor/pdfjs/` (legacy ESM build, no npm/bundler — matches the project's no-build-step convention). EPUB has no reader; the Download button remains its only action. Design rationale in `docs/superpowers/specs/2026-06-30-pdf-reader-design.md`.
 
-### Search and Ask AI
-Full-text search and AI Q&A over the downloaded library. Always enabled — zero startup cost.
+### Search
+Full-text search over the downloaded library. Always enabled — zero startup cost. (The web UI and CLI previously also offered an "Ask AI" natural-language Q&A mode built on this index via the Anthropic API; it was removed — plain FTS search below is all that remains.)
 
 - Index: SQLite FTS5 virtual table (`search_fts`) inside `tg_downloader.db`; BM25-ranked, accent-insensitive (`unicode61 remove_diacritics 1`)
 - Chunking: one chunk per PDF page, one per EPUB chapter section; implemented in `search/chunker.py`
-- Generation: Claude Haiku via Anthropic API (`search/generator.py`); requires `ANTHROPIC_API_KEY` in `.env`
 - Auto-indexed after each download; run `tgdctl index` to index existing files retroactively
 - On `listen` startup, any `downloaded` file missing from `search_fts` is indexed in the background (startup heal)
 - Only `pdf` and `epub` are indexed; other formats are skipped silently
 - `index_file` sets `media_messages.indexed_at` after every completed attempt — including image-only/scanned PDFs that yield no text (no chunks). `search_fts_missing_media_ids()` excludes any row with `indexed_at IS NOT NULL`, so the startup heal does not re-scan textless PDFs on every restart (previously it re-attempted them forever, e.g. ~569 image PDFs taking ~6 min each boot). Files that *raise* during PDF parsing (e.g. "malformed page tree") still fall through unmarked and will retry — minor, low-volume.
-- Web UI exposes `GET /api/search?q=` (FTS5) and `POST /api/ask` (Claude API streaming)
-- If `ANTHROPIC_API_KEY` is absent, `/api/search` still works; `/api/ask` returns HTTP 503
+- Web UI exposes `GET /api/search?q=` (FTS5)
 
 ### Container behaviour
 - `restart: always` — containers restart automatically on crash or server reboot

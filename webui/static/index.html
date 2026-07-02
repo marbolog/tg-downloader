@@ -266,13 +266,6 @@ body {
   font-size: .8rem; color: var(--text); line-height: 1.5;
   max-height: 72px; overflow: hidden;
 }
-.rag-answer {
-  background: var(--accent-light); border: 1px solid var(--accent);
-  border-radius: 8px; padding: 12px 14px;
-}
-.rag-answer-label { font-size: .73rem; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
-.rag-answer-text { font-size: .85rem; color: var(--text); line-height: 1.6; white-space: pre-wrap; }
-
 .rag-count {
   font-size: .78rem; color: var(--muted); padding: 2px 0 6px;
 }
@@ -327,7 +320,6 @@ body {
            onkeydown="if(event.key==='Enter')ragSearch()"
            oninput="if(!this.value)clearSearchFilter()">
     <button class="btn" onclick="ragSearch()">Search</button>
-    <button class="btn btn-primary" onclick="ragAsk()">Ask AI</button>
     <button id="btn-clear-search" class="btn" onclick="clearSearchFilter()" style="display:none">✕ Clear filter</button>
   </div>
   <div id="rag-results" class="rag-results" style="display:none"></div>
@@ -413,23 +405,9 @@ function renderSnippet(container, raw) {
   });
 }
 
-function _renderRagResults(chunks, container, answer) {
+function _renderRagResults(chunks, container) {
   container.replaceChildren();
   container.style.display = 'block';
-
-  if (answer) {
-    const box = document.createElement('div');
-    box.className = 'rag-answer';
-    const lbl = document.createElement('div');
-    lbl.className = 'rag-answer-label';
-    lbl.textContent = 'Answer';
-    const txt = document.createElement('div');
-    txt.className = 'rag-answer-text';
-    txt.textContent = answer;
-    box.appendChild(lbl);
-    box.appendChild(txt);
-    container.appendChild(box);
-  }
 
   const docCount = new Set(chunks.map(c => c.media_id)).size;
   const countBar = document.createElement('p');
@@ -528,7 +506,7 @@ async function ragSearch() {
       '/api/search?' + new URLSearchParams({ q, channel: S.channel || '' })
     ).then(r => r.json());
     const chunks = data.chunks || [];
-    _renderRagResults(chunks, el, null);
+    _renderRagResults(chunks, el);
     const ids = [...new Set(chunks.map(c => c.media_id))];
     S.searchIds = ids;
     S.page = 1;
@@ -548,23 +526,6 @@ function clearSearchFilter() {
   document.getElementById('rag-results').style.display = 'none';
   document.getElementById('rag-results').replaceChildren();
   load();
-}
-
-async function ragAsk() {
-  const q = document.getElementById('rag-input').value.trim();
-  if (!q) return;
-  const el = document.getElementById('rag-results');
-  _ragStatus(el, 'Generating answer...');
-  try {
-    const data = await fetch('/api/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q, channel: S.channel || '' }),
-    }).then(r => r.json());
-    _renderRagResults(data.chunks || [], el, data.answer || null);
-  } catch {
-    _ragError(el, 'Ask AI failed. Check that ANTHROPIC_API_KEY is configured.');
-  }
 }
 
 /* ── Boot ── */

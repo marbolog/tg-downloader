@@ -16,8 +16,6 @@ services:
       dockerfile: webui/Dockerfile
     container_name: tg-webui
     restart: always
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     ports:
       - "8090:8080"
     volumes:

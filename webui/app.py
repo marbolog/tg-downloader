@@ -24,7 +24,6 @@ log = logging.getLogger(__name__)
 DB_PATH = Path(os.environ.get("DB_PATH", "/app/data/tg_downloader.db"))
 THUMBS_DIR = Path(os.environ.get("THUMBS_DIR", "/app/data/thumbs"))
 SEARCH_TOP_K = int(os.environ.get("SEARCH_TOP_K", "8"))
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 app = FastAPI()
 db = Database(str(DB_PATH))
@@ -216,33 +215,6 @@ def fts_search(q: str, channel: str = "", top_k: int = 0):
     except Exception as exc:
         log.warning(f"FTS5 search error for {q!r}: {exc}")
         return {"chunks": [], "error": str(exc)}
-
-
-class _AskRequest(BaseModel):
-    query: str
-    channel: str = ""
-    top_k: int = 0
-
-
-@app.post("/api/ask")
-async def fts_ask(req: _AskRequest):
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
-    try:
-        chunks = db.search_fts_query(req.query, top_k=req.top_k or SEARCH_TOP_K, channel_identifier=req.channel)
-    except Exception as exc:
-        log.warning(f"FTS5 query error for {req.query!r}: {exc}")
-        chunks = []
-
-    if not chunks:
-        return {"answer": "No relevant content found in the library.", "chunks": []}
-
-    from search.generator import generate
-
-    tokens = []
-    async for token in generate(req.query, chunks, ANTHROPIC_API_KEY):
-        tokens.append(token)
-    return {"answer": "".join(tokens), "chunks": chunks}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

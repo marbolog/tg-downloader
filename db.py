@@ -287,7 +287,7 @@ class Database:
         self, q: str, top_k: int = 8, channel_identifier: str = ""
     ) -> list[dict]:
         """BM25-ranked FTS5 search. Single source of truth for the search query
-        used by the CLI (`ask`) and the web UI (`/api/search`, `/api/ask`)."""
+        used by the web UI (`/api/search`)."""
         select = """SELECT media_id, filename, page, chapter, channel_identifier,
                            snippet(search_fts, 0, '<<', '>>', '...', 20) AS text
                     FROM search_fts
