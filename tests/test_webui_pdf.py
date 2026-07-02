@@ -90,3 +90,38 @@ def test_view_pdf_missing_file_404(tmp_path, monkeypatch):
     webui_app, client = _client(tmp_path, monkeypatch)
     mid = _insert(webui_app.db, ext="pdf", local_path=str(tmp_path / "gone.pdf"), filename="gone.pdf")
     assert client.get(f"/api/pdf/{mid}").status_code == 404
+
+
+def test_view_pdf_filename_with_special_chars_is_safely_encoded(tmp_path, monkeypatch):
+    """Filenames come from Telegram message metadata, not from us — a quote or
+    CR/LF in one must not break out of the Content-Disposition header (HTTP
+    response splitting / arbitrary header injection). FileResponse's `filename=`
+    param percent-encodes via RFC 5987 instead of the old manual f-string, which
+    embedded the raw filename straight into the header value."""
+    pdf = tmp_path / "doc.pdf"
+    _make_pdf(pdf)
+    webui_app, client = _client(tmp_path, monkeypatch)
+    malicious = 'evil".pdf\r\nX-Injected: 1'
+    mid = _insert(webui_app.db, ext="pdf", local_path=str(pdf), filename=malicious)
+
+    r = client.get(f"/api/pdf/{mid}")
+    assert r.status_code == 200
+    cd = r.headers["content-disposition"]
+    assert "\r" not in cd and "\n" not in cd and '"' not in cd
+    assert "X-Injected" not in r.headers
+    assert cd.startswith("inline; filename*=utf-8''")
+
+
+def test_download_filename_with_special_chars_is_safely_encoded(tmp_path, monkeypatch):
+    pdf = tmp_path / "doc.pdf"
+    _make_pdf(pdf)
+    webui_app, client = _client(tmp_path, monkeypatch)
+    malicious = 'evil".pdf\r\nX-Injected: 1'
+    mid = _insert(webui_app.db, ext="pdf", local_path=str(pdf), filename=malicious)
+
+    r = client.get(f"/api/download/{mid}")
+    assert r.status_code == 200
+    cd = r.headers["content-disposition"]
+    assert "\r" not in cd and "\n" not in cd and '"' not in cd
+    assert "X-Injected" not in r.headers
+    assert cd.startswith("attachment; filename*=utf-8''")

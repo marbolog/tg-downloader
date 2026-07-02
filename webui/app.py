@@ -178,7 +178,7 @@ def download_file(file_id: int):
     return FileResponse(
         path,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{row["filename"]}"'},
+        filename=row["filename"],
     )
 
 
@@ -201,7 +201,8 @@ def view_pdf(file_id: int):
     return FileResponse(
         path,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{row["filename"]}"'},
+        filename=row["filename"],
+        content_disposition_type="inline",
     )
 
 
