@@ -95,6 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("scan-topics", help="Retroactively apply topic filters from config to already-downloaded files; auto-discard matches")
 
+    sub.add_parser("scan-newspapers", help="Retroactively detect newspaper/periodical-shaped files among already-downloaded files; auto-discard matches")
+
     sub.add_parser("scan-hashes", help="Compute SHA-256 for downloaded files without a hash (enables duplicate detection)")
 
     sub.add_parser("index", help="Index downloaded files into the RAG vector store")
@@ -124,6 +126,9 @@ async def run(args) -> None:
         return
     if args.command == "scan-topics":
         cmd_scan_topics(db, config)
+        return
+    if args.command == "scan-newspapers":
+        cmd_scan_newspapers(db)
         return
     if args.command == "scan-hashes":
         cmd_scan_hashes(db)
@@ -410,6 +415,35 @@ def cmd_scan_topics(db: Database, config: dict) -> None:
         console.print("[green]No topic matches found.[/green]")
         if missing:
             console.print(f"[dim]{missing} file(s) not found on disk.[/dim]")
+
+    console.print(
+        f"\n[green]Done.[/green] Scanned {len(items)} file(s): "
+        f"[red]{discarded} discarded[/red], {missing} missing."
+    )
+
+
+def cmd_scan_newspapers(db: Database) -> None:
+    from lang_filter import detect_newspaper
+
+    items = db.get_downloaded_media()
+    if not items:
+        console.print("[yellow]No downloaded files found.[/yellow]")
+        return
+
+    console.print(f"[dim]Scanning {len(items)} file(s) for newspaper/periodical pattern…[/dim]")
+
+    discarded = 0
+
+    def handle(item, path):
+        nonlocal discarded
+        ext = (item.get("ext") or "").lower()
+        if detect_newspaper(path, ext):
+            path.unlink(missing_ok=True)
+            db.mark_discarded(item["id"])
+            discarded += 1
+            log.info(f"Scan-discarded (newspaper): {item['filename']}")
+
+    missing = _run_file_batch(items, "Detecting newspapers", handle)
 
     console.print(
         f"\n[green]Done.[/green] Scanned {len(items)} file(s): "

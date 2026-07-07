@@ -127,6 +127,7 @@ uv run tgdctl scrape                 # RECOVER: queue every missing file, then d
 uv run tgdctl unsubscribe @channel   # unsubscribe from a channel
 uv run tgdctl scan-languages         # retroactively detect language for untagged files; discard German ones
 uv run tgdctl scan-topics            # retroactively apply topic filters to downloaded files; discard matches
+uv run tgdctl scan-newspapers        # retroactively detect newspaper/periodical-shaped files; discard matches
 uv run tgdctl scan-hashes            # compute SHA-256 for all downloaded files; enables duplicate detection in web UI
 uv run tgdctl index                  # index all downloaded files into the FTS5 search table
 ```
@@ -218,6 +219,13 @@ Topic detection uses a deeper text sample than language detection: first 15 PDF 
 `compile_topic_patterns()` pre-compiles keyword regexes once per session. Matching uses whole-word boundaries (`\b`) with `finditer` + early exit to avoid scanning entire documents when the threshold is already met. The debug log records which specific keywords triggered each match.
 
 Use `tgdctl scan-topics` to apply topic filters retroactively to already-downloaded files.
+
+**Newspaper/periodical detection** — opt-in via `filters.discard_newspapers: true` (default `false`). Two independent signals, either one triggers a discard:
+
+1. **Filename date** — an explicit numeric date in the filename (`YYYY-MM-DD`, `DD.MM.YYYY`, `DD_MM_YYYY`, etc.), locale-agnostic (no month names).
+2. **Dateline repetition** — a date-shaped token appears on at least half of the sampled pages (PDF) or content files (EPUB), when at least 4 are sampled. Ordinary books rarely repeat a date on most pages; a daily paper's running masthead/footer date does this by construction.
+
+Detection is a format signal, not a subject-matter one — unlike `discard_topics`, it doesn't use vocabulary keywords, since newspapers can cover any topic. Implemented in `lang_filter._looks_like_newspaper()` / `detect_newspaper()`. Use `tgdctl scan-newspapers` to apply retroactively to already-downloaded files.
 
 Formats with no text extraction support (MOBI, AZW3, CBR, CBZ, DJVU, FB2) are always kept; filters only apply to `pdf` and `epub`.
 
