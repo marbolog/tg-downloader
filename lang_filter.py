@@ -96,25 +96,28 @@ def analyze_file(
     topic_min_occurrences: int = 1,
     *,
     compiled_patterns: CompiledPatterns | None = None,
-) -> tuple[str | None, str | None]:
-    """Extract text once and return (language, matched_topic).
+    discard_newspapers: bool = False,
+) -> tuple[str | None, str | None, bool]:
+    """Extract text once and return (language, matched_topic, is_newspaper).
 
     More efficient than calling detect_language() + detect_topic() separately
     when both are needed — each of those calls extracts and parses the file.
-    When topics are configured the extraction uses a larger page sample
-    (_PDF_TOPIC_PAGES) and includes document metadata, which also gives
-    langdetect more signal.
+    When topics are configured or discard_newspapers is set, extraction uses a
+    larger page sample (_PDF_TOPIC_PAGES) and includes document metadata, which
+    also gives langdetect more signal.
     """
     has_topics = bool(topic_keywords or compiled_patterns)
+    needs_pages = has_topics or discard_newspapers
 
-    if has_topics:
+    if needs_pages:
         # Single open of the file; split output so each detector gets the right slice.
-        metadata, lang_text, topic_body = _extract_text_parts(file_path, ext)
+        metadata, lang_text, topic_body, pages = _extract_text_parts(file_path, ext)
         topic_text = (metadata + " " + topic_body).strip() if metadata else topic_body
     else:
-        # Shallow path — no topic detection needed, so don't read deeper than necessary.
+        # Shallow path — no topic/newspaper detection needed, so don't read deeper than necessary.
         lang_text = _extract_text(file_path, ext, topic_depth=False)
         topic_text = None
+        pages = []
 
     lang = _run_lang_detection(file_path.name, lang_text)
     if lang is None and ext in ("pdf", "epub") and _filename_is_german(file_path.name):
@@ -128,7 +131,13 @@ def analyze_file(
         patterns = compiled_patterns or compile_topic_patterns(topic_keywords or {})
         topic = _run_topic_detection(file_path.name, topic_text, patterns, topic_min_matches, topic_min_occurrences)
 
-    return lang, topic
+    is_newspaper = False
+    if discard_newspapers and ext in ("pdf", "epub"):
+        is_newspaper = _looks_like_newspaper(file_path.name, pages)
+        if is_newspaper:
+            log.debug(f"{file_path.name}: detected as newspaper/periodical")
+
+    return lang, topic, is_newspaper
 
 
 def detect_language(file_path: Path, ext: str) -> str | None:
@@ -178,14 +187,28 @@ def detect_topic(
     return _run_topic_detection(file_path.name, text, patterns, min_matches, min_occurrences)
 
 
+def detect_newspaper(file_path: Path, ext: str) -> bool:
+    """Return True if the file looks like a newspaper/periodical.
+
+    Used by the retroactive `scan-newspapers` command, which calls this
+    directly per file rather than through analyze_file's combined
+    language+topic path.
+    """
+    if ext not in ("pdf", "epub"):
+        return False
+    _, _, _, pages = _extract_text_parts(file_path, ext)
+    return _looks_like_newspaper(file_path.name, pages)
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _extract_text_parts(file_path: Path, ext: str) -> tuple[str, str, str]:
-    """Single-pass extraction used by analyze_file. Returns (metadata, lang_body, topic_body).
+def _extract_text_parts(file_path: Path, ext: str) -> tuple[str, str, str, list[str]]:
+    """Single-pass extraction used by analyze_file. Returns (metadata, lang_body, topic_body, pages).
 
     Both bodies come from a single doc/zipfile open. lang_body uses the shallow
     page/chapter limits and excludes EPUB nav/TOC noise; topic_body uses the
-    deeper limits and includes nav/TOC. Empty strings on error or unsupported format.
+    deeper limits and includes nav/TOC. pages is the per-page/chapter list behind
+    topic_body, used by the newspaper detector. Empty values on error or unsupported format.
     """
     try:
         if ext == "pdf":
@@ -194,7 +217,7 @@ def _extract_text_parts(file_path: Path, ext: str) -> tuple[str, str, str]:
             return _epub_text_parts(file_path)
     except Exception as exc:
         log.warning(f"{file_path.name}: text extraction error: {exc}")
-    return "", "", ""
+    return "", "", "", []
 
 
 def _extract_text(file_path: Path, ext: str, *, topic_depth: bool) -> str | None:
@@ -310,10 +333,12 @@ def _pdf_text(file_path: Path, pages: int, *, include_metadata: bool = False) ->
     return " ".join(parts)
 
 
-def _pdf_text_parts(file_path: Path) -> tuple[str, str, str]:
-    """Open the PDF once and return (metadata, lang_body, topic_body).
+def _pdf_text_parts(file_path: Path) -> tuple[str, str, str, list[str]]:
+    """Open the PDF once and return (metadata, lang_body, topic_body, pages).
 
     Reads up to _PDF_TOPIC_PAGES pages; lang_body is the first _PDF_PAGES of those.
+    pages is the per-page text list (same sample as topic_body) -- used by the
+    newspaper dateline-repetition check, which needs page-level granularity.
     """
     doc = fitz.open(str(file_path))
     meta = doc.metadata or {}
@@ -326,7 +351,7 @@ def _pdf_text_parts(file_path: Path) -> tuple[str, str, str]:
     pages_text = [doc[i].get_text() for i in range(topic_n)]
     lang_body = " ".join(pages_text[:_PDF_PAGES])
     topic_body = " ".join(pages_text)
-    return metadata, lang_body, topic_body
+    return metadata, lang_body, topic_body, pages_text
 
 
 def _epub_text(file_path: Path, *, topic_depth: bool) -> str:
@@ -369,8 +394,12 @@ def _epub_text(file_path: Path, *, topic_depth: bool) -> str:
         return " ".join(parts)
 
 
-def _epub_text_parts(file_path: Path) -> tuple[str, str, str]:
-    """Open the EPUB once and return (metadata, lang_body, topic_body)."""
+def _epub_text_parts(file_path: Path) -> tuple[str, str, str, list[str]]:
+    """Open the EPUB once and return (metadata, lang_body, topic_body, chapters).
+
+    chapters is the per-content-file text list behind topic_body -- used by the
+    newspaper dateline-repetition check at chapter granularity.
+    """
     with zipfile.ZipFile(file_path) as zf:
         metadata = ""
         opf = next((n for n in zf.namelist() if n.lower().endswith(".opf")), None)
@@ -395,8 +424,9 @@ def _epub_text_parts(file_path: Path) -> tuple[str, str, str]:
         lang_html = [n for n in all_html if "toc" not in n.lower() and "nav" not in n.lower()]
 
         lang_body = _read_epub_chapters(zf, lang_html[:_EPUB_CHAPTERS])
-        topic_body = _read_epub_chapters(zf, all_html[:_EPUB_TOPIC_CHAPTERS])
-        return metadata, lang_body, topic_body
+        chapters = [_read_epub_chapters(zf, [name]) for name in all_html[:_EPUB_TOPIC_CHAPTERS]]
+        topic_body = " ".join(chapters)
+        return metadata, lang_body, topic_body, chapters
 
 
 def _read_epub_chapters(zf: zipfile.ZipFile, names: list[str]) -> str:
