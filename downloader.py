@@ -22,6 +22,7 @@ async def download_item(
     topic_keywords: dict | None = None,
     topic_min_matches: int = 2,
     topic_min_occurrences: int = 1,
+    discard_newspapers: bool = False,
 ) -> bool:
     """Download one media item to dest. Returns True on success.
 
@@ -53,7 +54,10 @@ async def download_item(
 
             ext = item.get("ext") or ""
 
-            lang, topic = analyze_file(filepath, ext, topic_keywords, topic_min_matches, topic_min_occurrences)
+            lang, topic, is_newspaper = analyze_file(
+                filepath, ext, topic_keywords, topic_min_matches, topic_min_occurrences,
+                discard_newspapers=discard_newspapers,
+            )
 
             if lang == DISCARD_LANG:
                 filepath.unlink(missing_ok=True)
@@ -65,6 +69,12 @@ async def download_item(
                 filepath.unlink(missing_ok=True)
                 db.mark_discarded(item["id"])
                 log.info(f"[{label}] Auto-discarded (topic: {topic}): {item['filename']}")
+                return True
+
+            if is_newspaper:
+                filepath.unlink(missing_ok=True)
+                db.mark_discarded(item["id"])
+                log.info(f"[{label}] Auto-discarded (newspaper): {item['filename']}")
                 return True
 
             file_hash = None
