@@ -18,6 +18,15 @@ Combined analysis:
   langdetect; metadata + topic_body feeds topic matching. Use this in
   download_item() instead of calling detect_language() + detect_topic()
   separately, which would parse the file twice.
+
+Newspaper/periodical detection:
+  _looks_like_newspaper() flags files via an explicit date in the filename, or
+  a dateline-shaped token repeated across at least half of the sampled
+  pages/chapters (a running masthead date, unlike ordinary books). This is a
+  format signal, not a subject-matter one -- unlike discard_topics, it uses no
+  vocabulary keywords, since a newspaper can be about any topic. Opt-in via
+  filters.discard_newspapers in config.yaml; independent of language/topic
+  filtering (analyze_file() runs all three and returns a 3-tuple).
 """
 
 import logging
@@ -51,6 +60,17 @@ _GERMAN_MONTHS = {
     "juli", "oktober", "dezember",
 }
 _GERMAN_UMLAUTS = frozenset("äöüßÄÖÜ")
+
+# Numeric, locale-agnostic date patterns (no month names -- unlike the German
+# filename heuristic above, newspapers arrive in many languages).
+_FILENAME_DATE_RE = re.compile(
+    r"(?<!\d)(\d{4}[-_.]\d{2}[-_.]\d{2}|\d{2}[-_.]\d{2}[-_.]\d{4})(?!\d)"
+)
+_DATELINE_RE = re.compile(
+    r"(?<!\d)(\d{1,2}[./]\d{1,2}[./]\d{2,4}|\d{4}-\d{2}-\d{2})(?!\d)"
+)
+_NEWSPAPER_PAGE_RATIO = 0.5   # fraction of sampled pages/chapters needing a dateline
+_NEWSPAPER_MIN_PAGES = 4      # below this sample size the ratio is too noisy to trust
 
 # Type alias for pre-compiled topic patterns.
 # Each entry is (original_keyword_lowercase, compiled_regex).
@@ -253,6 +273,24 @@ def _filename_is_german(filename: str) -> bool:
         return True
     words = set(re.findall(r"[A-Za-zäöüÄÖÜß]+", filename.lower()))
     return bool(words & _GERMAN_MONTHS)
+
+
+def _looks_like_newspaper(filename: str, pages: list[str]) -> bool:
+    """Return True if the file looks like a newspaper/periodical.
+
+    Two independent signals, either one triggers a match:
+      1. Filename carries an explicit date (numeric only, locale-agnostic).
+      2. A dateline-shaped token repeats across at least half of the sampled
+         pages/chapters -- a running masthead/footer date, which books rarely
+         do but daily papers do by construction. Below _NEWSPAPER_MIN_PAGES
+         samples the ratio is too noisy to trust, so it's skipped.
+    """
+    if _FILENAME_DATE_RE.search(filename):
+        return True
+    if len(pages) < _NEWSPAPER_MIN_PAGES:
+        return False
+    hits = sum(1 for p in pages if _DATELINE_RE.search(p))
+    return (hits / len(pages)) >= _NEWSPAPER_PAGE_RATIO
 
 
 def _pdf_text(file_path: Path, pages: int, *, include_metadata: bool = False) -> str:
