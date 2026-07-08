@@ -145,6 +145,7 @@ _PUBLICATION_WS_RE = re.compile(r"\s+")
 
 
 def _normalize_for_publication_match(filename: str) -> str:
+    """Lowercase, strip the .pdf/.epub extension, and collapse separators/whitespace to single spaces."""
     stem = _PUBLICATION_EXT_RE.sub("", filename)
     stem = _PUBLICATION_SEP_RE.sub(" ", stem)
     return _PUBLICATION_WS_RE.sub(" ", stem).strip().lower()
