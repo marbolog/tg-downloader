@@ -99,3 +99,24 @@ class TestLooksLikeNewspaper:
         ]
         # 1 of 4 pages -> ratio 0.25 < 0.5, and no day number is present anyway
         assert _looks_like_newspaper("book.pdf", pages) is False
+
+    def test_filename_compact_ddmm_date_detected(self):
+        assert _looks_like_newspaper("NYT 1602.pdf", []) is True
+
+    def test_filename_compact_mmdd_date_detected(self):
+        assert _looks_like_newspaper("NY Daily News_1204.pdf", []) is True
+
+    def test_filename_compact_yyyymmdd_date_detected(self):
+        assert _looks_like_newspaper("WAPO_20240413.pdf", []) is True
+
+    def test_filename_two_digit_year_dotted_date_detected(self):
+        assert _looks_like_newspaper("FT How to Spend it 7.3.26.pdf", []) is True
+
+    def test_filename_bare_year_not_detected_as_compact_date(self):
+        assert _looks_like_newspaper("Vietnam 1975.pdf", []) is False
+
+    def test_filename_bare_recent_year_not_detected_as_compact_date(self):
+        assert _looks_like_newspaper("My Book 2026.pdf", []) is False
+
+    def test_filename_december_31_compact_date_detected(self):
+        assert _looks_like_newspaper("Late Edition 1231.pdf", []) is True

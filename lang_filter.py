@@ -102,6 +102,27 @@ _MONTH_NAME_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Compact date formats: digits jammed together with no separator, or a dotted
+# date with a 2-digit year. Real-world filenames use these constantly (e.g.
+# "NYT 1602.pdf", "NY Daily News_1204.pdf", "WAPO_20240413.pdf") but the
+# separator-based patterns above miss them entirely.
+#
+# _COMPACT_DATE_RE matches a bare 4-digit run only if it's plausible as a
+# day+month pair in EITHER order (day 01-31 + month 01-12, or the reverse).
+# This is what excludes bare years: "2026" fails both interpretations because
+# "20" is not a valid month, so a book title ending in a year never matches.
+_COMPACT_DATE_RE = re.compile(
+    r"(?<!\d)(?:"
+    r"(?:0[1-9]|[12]\d|3[01])(?:0[1-9]|1[0-2])"  # DDMM
+    r"|(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])"  # MMDD
+    r")(?!\d)"
+)
+# A 19xx/20xx year directly followed by a valid month and day, no separators
+# ("WAPO_20240413.pdf").
+_COMPACT_LONGDATE_RE = re.compile(
+    r"(?<!\d)(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?!\d)"
+)
+
 _NEWSPAPER_PAGE_RATIO = 0.5   # fraction of sampled pages/chapters needing a dateline
 _NEWSPAPER_MIN_PAGES = 4      # below this sample size the ratio is too noisy to trust
 
@@ -344,7 +365,13 @@ def _looks_like_newspaper(filename: str, pages: list[str]) -> bool:
          Below _NEWSPAPER_MIN_PAGES samples the ratio is too noisy to trust,
          so it's skipped.
     """
-    if _FILENAME_DATE_RE.search(filename) or _MONTH_NAME_DATE_RE.search(filename):
+    if (
+        _FILENAME_DATE_RE.search(filename)
+        or _MONTH_NAME_DATE_RE.search(filename)
+        or _DATELINE_RE.search(filename)
+        or _COMPACT_DATE_RE.search(filename)
+        or _COMPACT_LONGDATE_RE.search(filename)
+    ):
         return True
     if len(pages) < _NEWSPAPER_MIN_PAGES:
         return False
