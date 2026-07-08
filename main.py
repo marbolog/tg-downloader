@@ -128,7 +128,7 @@ async def run(args) -> None:
         cmd_scan_topics(db, config)
         return
     if args.command == "scan-newspapers":
-        cmd_scan_newspapers(db)
+        cmd_scan_newspapers(db, config)
         return
     if args.command == "scan-hashes":
         cmd_scan_hashes(db)
@@ -422,8 +422,10 @@ def cmd_scan_topics(db: Database, config: dict) -> None:
     )
 
 
-def cmd_scan_newspapers(db: Database) -> None:
+def cmd_scan_newspapers(db: Database, config: dict) -> None:
     from lang_filter import detect_newspaper
+
+    newspaper_names = frozenset(config["filters"].get("newspaper_names") or [])
 
     items = db.get_downloaded_media()
     if not items:
@@ -437,7 +439,7 @@ def cmd_scan_newspapers(db: Database) -> None:
     def handle(item, path):
         nonlocal discarded
         ext = (item.get("ext") or "").lower()
-        if detect_newspaper(path, ext):
+        if detect_newspaper(path, ext, newspaper_names):
             path.unlink(missing_ok=True)
             db.mark_discarded(item["id"])
             discarded += 1

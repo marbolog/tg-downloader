@@ -23,6 +23,7 @@ async def download_item(
     topic_min_matches: int = 2,
     topic_min_occurrences: int = 1,
     discard_newspapers: bool = False,
+    newspaper_names: frozenset[str] = frozenset(),
 ) -> bool:
     """Download one media item to dest. Returns True on success.
 
@@ -57,6 +58,7 @@ async def download_item(
             lang, topic, is_newspaper = analyze_file(
                 filepath, ext, topic_keywords, topic_min_matches, topic_min_occurrences,
                 discard_newspapers=discard_newspapers,
+                newspaper_names=newspaper_names,
             )
 
             if lang == DISCARD_LANG:

@@ -21,23 +21,24 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     topic_min_matches = config["filters"].get("topic_min_matches", 2)
     topic_min_occurrences = config["filters"].get("topic_min_keyword_occurrences", 1)
     discard_newspapers = config["filters"].get("discard_newspapers", False)
+    newspaper_names = frozenset(config["filters"].get("newspaper_names") or [])
     destination.mkdir(parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(concurrent_downloads)
 
-    await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers)
-    await _heal_missing(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers)
-    await _backfill_missed(client, db, allowed, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers)
+    await _flush_pending(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names)
+    await _heal_missing(client, db, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names)
+    await _backfill_missed(client, db, allowed, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names)
 
     asyncio.create_task(_heal_search_index(db))
     asyncio.create_task(_cleanup_loop(db, retention_days))
     asyncio.create_task(_heartbeat_loop(db))
     asyncio.create_task(_backfill_loop(
         client, db, allowed, destination, semaphore,
-        topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers,
+        topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names,
     ))
     asyncio.create_task(_deep_reconcile_loop(
         client, db, allowed, destination, semaphore,
-        topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers,
+        topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names,
     ))
 
     channels = db.list_channels()
@@ -48,7 +49,7 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     @client.on(events.NewMessage)
     async def on_new_message(event):
         try:
-            await _handle(event, db, allowed, client, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers)
+            await _handle(event, db, allowed, client, destination, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names)
         except Exception as exc:
             log.error(f"Error handling message {event.message.id}: {exc}", exc_info=True)
 
@@ -61,7 +62,8 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
 
 
 async def _flush_pending(
-    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers
+    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences,
+    discard_newspapers, newspaper_names
 ) -> None:
     """Download all items that are pending in the DB (e.g. from a previous scrape)."""
     pending = db.get_pending_media()
@@ -73,7 +75,8 @@ async def _flush_pending(
                         topic_keywords=topic_keywords,
                         topic_min_matches=topic_min_matches,
                         topic_min_occurrences=topic_min_occurrences,
-                        discard_newspapers=discard_newspapers)
+                        discard_newspapers=discard_newspapers,
+                        newspaper_names=newspaper_names)
           for item in pending],
         return_exceptions=True,
     )
@@ -82,7 +85,8 @@ async def _flush_pending(
 
 
 async def _heal_missing(
-    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers
+    client, db, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences,
+    discard_newspapers, newspaper_names
 ) -> None:
     """Re-download files marked 'downloaded' in the DB but absent from disk."""
     downloaded = db.get_downloaded_media()
@@ -98,7 +102,8 @@ async def _heal_missing(
                         topic_keywords=topic_keywords,
                         topic_min_matches=topic_min_matches,
                         topic_min_occurrences=topic_min_occurrences,
-                        discard_newspapers=discard_newspapers)
+                        discard_newspapers=discard_newspapers,
+                        newspaper_names=newspaper_names)
           for item in missing],
         return_exceptions=True,
     )
@@ -108,7 +113,7 @@ async def _heal_missing(
 
 async def _backfill_missed(
     client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches,
-    topic_min_occurrences, discard_newspapers, warn_empty: bool = True
+    topic_min_occurrences, discard_newspapers, newspaper_names, warn_empty: bool = True
 ) -> None:
     """Fetch messages that arrived while the service was down and download them.
 
@@ -169,6 +174,7 @@ async def _backfill_missed(
                     topic_min_matches=topic_min_matches,
                     topic_min_occurrences=topic_min_occurrences,
                     discard_newspapers=discard_newspapers,
+                    newspaper_names=newspaper_names,
                 ))
 
         if tasks:
@@ -233,7 +239,8 @@ async def _heartbeat_loop(db: Database) -> None:
 
 
 async def _backfill_loop(
-    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences,
+    discard_newspapers, newspaper_names
 ) -> None:
     """Re-run backfill every hour as a safety net against silent update-stream
     stalls. Telethon's real-time update channel can go stale after a network blip
@@ -249,7 +256,7 @@ async def _backfill_loop(
         try:
             await _backfill_missed(
                 client, db, allowed, dest, semaphore,
-                topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers,
+                topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names,
                 warn_empty=False,
             )
         except Exception as exc:
@@ -268,7 +275,8 @@ RECONCILE_INTERVAL_SECONDS = 86400  # daily
 
 
 async def _deep_reconcile_loop(
-    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences,
+    discard_newspapers, newspaper_names
 ) -> None:
     """Once a day, re-scan each channel's recent window ignoring the backfill
     watermark, recovering media that real-time delivery dropped mid-burst."""
@@ -277,14 +285,15 @@ async def _deep_reconcile_loop(
         try:
             await _deep_reconcile(
                 client, db, allowed, dest, semaphore,
-                topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers,
+                topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names,
             )
         except Exception as exc:
             log.error(f"Deep reconcile error: {exc}", exc_info=True)
 
 
 async def _deep_reconcile(
-    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers
+    client, db, allowed, dest, semaphore, topic_keywords, topic_min_matches, topic_min_occurrences,
+    discard_newspapers, newspaper_names
 ) -> None:
     for ch in db.list_channels():
         recorded = db.get_recorded_message_ids(ch["id"])
@@ -333,6 +342,7 @@ async def _deep_reconcile(
                     topic_min_matches=topic_min_matches,
                     topic_min_occurrences=topic_min_occurrences,
                     discard_newspapers=discard_newspapers,
+                    newspaper_names=newspaper_names,
                 ))
 
         if tasks:
@@ -374,7 +384,7 @@ def _run_cleanup(db: Database, retention_days: int) -> None:
 
 async def _handle(
     event, db, allowed, client, dest, semaphore,
-    topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers
+    topic_keywords, topic_min_matches, topic_min_occurrences, discard_newspapers, newspaper_names
 ) -> None:
     if not event.message.media:
         return
@@ -428,6 +438,7 @@ async def _handle(
             topic_min_matches=topic_min_matches,
             topic_min_occurrences=topic_min_occurrences,
             discard_newspapers=discard_newspapers,
+            newspaper_names=newspaper_names,
         ))
 
 
