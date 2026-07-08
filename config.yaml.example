@@ -56,11 +56,23 @@ filters:
   # topic_min_keyword_occurrences: 2
 
   # Optional: auto-discard files that look like newspapers/periodicals rather
-  # than books. Detected via an explicit date in the filename, or a dateline
-  # repeated across at least half the sampled pages/chapters (a running
-  # masthead date -- something ordinary books rarely do). Only PDF and EPUB
-  # are scanned. Run `tgdctl scan-newspapers` to apply retroactively.
+  # than books. Detected via an explicit date in the filename (numeric,
+  # spelled-out month name, or compact like "1602"), a known publication name
+  # at the start of the filename, or a dateline repeated across at least half
+  # the sampled pages/chapters (a running masthead date -- something ordinary
+  # books rarely do). Only PDF and EPUB are scanned. Run `tgdctl
+  # scan-newspapers` to apply retroactively.
   # discard_newspapers: true
+  #
+  # Additional publication names to match at the start of a filename, on top
+  # of the built-in list (FT, NYT, The Guardian, National Geographic, etc.).
+  # Use this for channel-specific publications the built-in list can't guess.
+  # Avoid common dictionary words here (e.g. "Time") -- they risk matching
+  # unrelated book titles that happen to start with the same word.
+  # newspaper_names:
+  #   - Frankie
+  #   - Puzzle Life
+  #   - AirForces Monthly
 
 search:
   top_k: 8           # chunks returned per search/ask query

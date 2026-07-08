@@ -49,6 +49,7 @@ def _apply_defaults(raw: dict) -> None:
     filters.setdefault("topic_min_matches", 2)
     filters.setdefault("topic_min_keyword_occurrences", 1)
     filters.setdefault("discard_newspapers", False)
+    filters.setdefault("newspaper_names", [])
 
     _apply_rag_defaults(raw)
 
