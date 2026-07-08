@@ -22,8 +22,11 @@ Combined analysis:
 Newspaper/periodical detection:
   _looks_like_newspaper() flags files via an explicit date in the filename, or
   a dateline-shaped token repeated across at least half of the sampled
-  pages/chapters (a running masthead date, unlike ordinary books). This is a
-  format signal, not a subject-matter one -- unlike discard_topics, it uses no
+  pages/chapters (a running masthead date, unlike ordinary books). Dates are
+  recognized both numerically (2026-07-06) and as spelled-out month names in
+  EN/ES/FR/IT/DE (16 Gennaio 2026, 7 de julio de 2026, JULY 4TH-10TH 2026),
+  since real-world papers date themselves either way. This is a format
+  signal, not a subject-matter one -- unlike discard_topics, it uses no
   vocabulary keywords, since a newspaper can be about any topic. Opt-in via
   filters.discard_newspapers in config.yaml; independent of language/topic
   filtering (analyze_file() runs all three and returns a 3-tuple).
@@ -69,6 +72,36 @@ _FILENAME_DATE_RE = re.compile(
 _DATELINE_RE = re.compile(
     r"(?<!\d)(\d{1,2}[./]\d{1,2}[./]\d{2,4}|\d{4}-\d{2}-\d{2})(?!\d)"
 )
+
+# Spelled-out month names for the languages actually seen in this library's
+# newspaper channels (EN/ES/FR/IT/DE). Many real papers date themselves this
+# way (e.g. "Corriere della Sera - 16 Gennaio 2026", "El Pais - 7 de julio de
+# 2026", "The Economist US 04 July 2026") with no numeric date anywhere in the
+# filename or masthead, so the numeric-only patterns above miss them entirely.
+_MONTH_NAMES = {
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+    "septiembre", "octubre", "noviembre", "diciembre",
+    "janvier", "février", "fevrier", "mars", "avril", "mai", "juin", "juillet",
+    "août", "aout", "septembre", "octobre", "novembre", "décembre", "decembre",
+    "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
+    "agosto", "settembre", "ottobre", "novembre", "dicembre",
+    "januar", "februar", "märz", "marz", "april", "mai", "juni", "juli",
+    "august", "september", "oktober", "november", "dezember",
+}
+_MONTH_NAME_ALT = "|".join(re.escape(m) for m in sorted(_MONTH_NAMES, key=len, reverse=True))
+# A day number, optionally ordinal (4th) and optionally a range (4th-10th),
+# for magazine-style "JULY 4TH-10TH 2026" masthead dates.
+_DAY_RE = r"\d{1,2}(?:st|nd|rd|th)?(?:\s*[-–]\s*\d{1,2}(?:st|nd|rd|th)?)?"
+# Optional connector word between day/month/year ("7 de julio de 2026").
+_DATE_FILLER_RE = r"(?:\s+(?:de|del|du|des|the|of|le|la|di))?"
+_MONTH_NAME_DATE_RE = re.compile(
+    rf"\b{_DAY_RE}{_DATE_FILLER_RE}\s+(?:{_MONTH_NAME_ALT})\b{_DATE_FILLER_RE}\s+(?:19|20)\d{{2}}\b"
+    rf"|\b(?:{_MONTH_NAME_ALT})\b{_DATE_FILLER_RE}\s+{_DAY_RE}{_DATE_FILLER_RE}\s+(?:19|20)\d{{2}}\b",
+    re.IGNORECASE,
+)
+
 _NEWSPAPER_PAGE_RATIO = 0.5   # fraction of sampled pages/chapters needing a dateline
 _NEWSPAPER_MIN_PAGES = 4      # below this sample size the ratio is too noisy to trust
 
@@ -302,17 +335,23 @@ def _looks_like_newspaper(filename: str, pages: list[str]) -> bool:
     """Return True if the file looks like a newspaper/periodical.
 
     Two independent signals, either one triggers a match:
-      1. Filename carries an explicit date (numeric only, locale-agnostic).
-      2. A dateline-shaped token repeats across at least half of the sampled
-         pages/chapters -- a running masthead/footer date, which books rarely
-         do but daily papers do by construction. Below _NEWSPAPER_MIN_PAGES
-         samples the ratio is too noisy to trust, so it's skipped.
+      1. Filename carries an explicit date, either numeric (locale-agnostic)
+         or spelled-out month name (EN/ES/FR/IT/DE -- the languages seen in
+         this library's newspaper channels).
+      2. A dateline-shaped token (numeric or month-name) repeats across at
+         least half of the sampled pages/chapters -- a running masthead/footer
+         date, which books rarely do but daily papers do by construction.
+         Below _NEWSPAPER_MIN_PAGES samples the ratio is too noisy to trust,
+         so it's skipped.
     """
-    if _FILENAME_DATE_RE.search(filename):
+    if _FILENAME_DATE_RE.search(filename) or _MONTH_NAME_DATE_RE.search(filename):
         return True
     if len(pages) < _NEWSPAPER_MIN_PAGES:
         return False
-    hits = sum(1 for p in pages if _DATELINE_RE.search(p))
+    hits = sum(
+        1 for p in pages
+        if _DATELINE_RE.search(p) or _MONTH_NAME_DATE_RE.search(p)
+    )
     return (hits / len(pages)) >= _NEWSPAPER_PAGE_RATIO
 
 
