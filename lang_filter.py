@@ -20,16 +20,18 @@ Combined analysis:
   separately, which would parse the file twice.
 
 Newspaper/periodical detection:
-  _looks_like_newspaper() flags files via an explicit date in the filename, or
-  a dateline-shaped token repeated across at least half of the sampled
-  pages/chapters (a running masthead date, unlike ordinary books). Dates are
-  recognized both numerically (2026-07-06) and as spelled-out month names in
-  EN/ES/FR/IT/DE (16 Gennaio 2026, 7 de julio de 2026, JULY 4TH-10TH 2026),
-  since real-world papers date themselves either way. This is a format
-  signal, not a subject-matter one -- unlike discard_topics, it uses no
-  vocabulary keywords, since a newspaper can be about any topic. Opt-in via
-  filters.discard_newspapers in config.yaml; independent of language/topic
-  filtering (analyze_file() runs all three and returns a 3-tuple).
+  _looks_like_newspaper() flags files via an explicit date in the filename
+  (numeric, spelled-out month name in EN/ES/FR/IT/DE, or compact/separator-
+  less like "1602"/"20240413"), a known-publication-name filename match (a
+  built-in list plus config.yaml's filters.newspaper_names, for filenames
+  with no date at all -- e.g. "FT US.pdf"), or a dateline-shaped token
+  repeated across at least half of the sampled pages/chapters (a running
+  masthead date, unlike ordinary books). The publication-name signal is the
+  one exception to "no vocabulary keywords" below: it matches publication
+  identity, not subject matter, so it doesn't undermine the topic-agnostic
+  design. Opt-in via filters.discard_newspapers in config.yaml; independent
+  of language/topic filtering (analyze_file() runs all three and returns a
+  3-tuple).
 """
 
 import logging
@@ -192,6 +194,7 @@ def analyze_file(
     *,
     compiled_patterns: CompiledPatterns | None = None,
     discard_newspapers: bool = False,
+    newspaper_names: frozenset[str] = frozenset(),
 ) -> tuple[str | None, str | None, bool]:
     """Extract text once and return (language, matched_topic, is_newspaper).
 
@@ -228,7 +231,7 @@ def analyze_file(
 
     is_newspaper = False
     if discard_newspapers and ext in ("pdf", "epub"):
-        is_newspaper = _looks_like_newspaper(file_path.name, pages)
+        is_newspaper = _looks_like_newspaper(file_path.name, pages, newspaper_names)
         if is_newspaper:
             log.debug(f"{file_path.name}: detected as newspaper/periodical")
 
@@ -282,7 +285,9 @@ def detect_topic(
     return _run_topic_detection(file_path.name, text, patterns, min_matches, min_occurrences)
 
 
-def detect_newspaper(file_path: Path, ext: str) -> bool:
+def detect_newspaper(
+    file_path: Path, ext: str, newspaper_names: frozenset[str] = frozenset()
+) -> bool:
     """Return True if the file looks like a newspaper/periodical.
 
     Used by the retroactive `scan-newspapers` command, which calls this
@@ -292,7 +297,7 @@ def detect_newspaper(file_path: Path, ext: str) -> bool:
     if ext not in ("pdf", "epub"):
         return False
     _, _, _, pages = _extract_text_parts(file_path, ext)
-    return _looks_like_newspaper(file_path.name, pages)
+    return _looks_like_newspaper(file_path.name, pages, newspaper_names)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -393,14 +398,19 @@ def _filename_is_german(filename: str) -> bool:
     return bool(words & _GERMAN_MONTHS)
 
 
-def _looks_like_newspaper(filename: str, pages: list[str]) -> bool:
+def _looks_like_newspaper(
+    filename: str, pages: list[str], newspaper_names: frozenset[str] = frozenset()
+) -> bool:
     """Return True if the file looks like a newspaper/periodical.
 
-    Two independent signals, either one triggers a match:
-      1. Filename carries an explicit date, either numeric (locale-agnostic)
-         or spelled-out month name (EN/ES/FR/IT/DE -- the languages seen in
-         this library's newspaper channels).
-      2. A dateline-shaped token (numeric or month-name) repeats across at
+    Three independent signals, any one triggers a match:
+      1. Filename carries an explicit date -- numeric (locale-agnostic),
+         spelled-out month name (EN/ES/FR/IT/DE), or compact/separator-less
+         (e.g. "1602", "20240413").
+      2. Filename starts with a known publication name (built-in list plus
+         config.yaml's filters.newspaper_names) -- for filenames that carry
+         no date at all (e.g. "FT US.pdf").
+      3. A dateline-shaped token (numeric or month-name) repeats across at
          least half of the sampled pages/chapters -- a running masthead/footer
          date, which books rarely do but daily papers do by construction.
          Below _NEWSPAPER_MIN_PAGES samples the ratio is too noisy to trust,
@@ -412,6 +422,7 @@ def _looks_like_newspaper(filename: str, pages: list[str]) -> bool:
         or _DATELINE_RE.search(filename)
         or _COMPACT_DATE_RE.search(filename)
         or _COMPACT_LONGDATE_RE.search(filename)
+        or _filename_matches_known_publication(filename, newspaper_names)
     ):
         return True
     if len(pages) < _NEWSPAPER_MIN_PAGES:

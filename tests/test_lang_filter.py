@@ -121,6 +121,18 @@ class TestLooksLikeNewspaper:
     def test_filename_december_31_compact_date_detected(self):
         assert _looks_like_newspaper("Late Edition 1231.pdf", []) is True
 
+    def test_known_publication_name_with_no_date_detected(self):
+        assert _looks_like_newspaper("FT US.pdf", []) is True
+
+    def test_unrelated_date_free_title_not_detected(self):
+        assert _looks_like_newspaper("Laura Santini - Umami.epub", []) is False
+
+    def test_config_extra_name_detected_when_passed(self):
+        assert _looks_like_newspaper("Frankie Issue 108.pdf", [], frozenset({"Frankie"})) is True
+
+    def test_config_extra_name_not_detected_when_not_passed(self):
+        assert _looks_like_newspaper("Frankie Issue 108.pdf", []) is False
+
 
 class TestFilenameMatchesKnownPublication:
     def test_exact_match(self):
