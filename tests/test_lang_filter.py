@@ -4,7 +4,7 @@ No tests here require real PDF/EPUB file fixtures — those functions are
 verified manually (see docs/superpowers/plans/2026-07-06-newspaper-filter.md).
 """
 
-from lang_filter import _looks_like_newspaper
+from lang_filter import _filename_matches_known_publication, _looks_like_newspaper
 
 
 class TestLooksLikeNewspaper:
@@ -120,3 +120,45 @@ class TestLooksLikeNewspaper:
 
     def test_filename_december_31_compact_date_detected(self):
         assert _looks_like_newspaper("Late Edition 1231.pdf", []) is True
+
+
+class TestFilenameMatchesKnownPublication:
+    def test_exact_match(self):
+        assert _filename_matches_known_publication("FT.pdf") is True
+
+    def test_match_with_suffix(self):
+        assert _filename_matches_known_publication("FT EU.pdf") is True
+
+    def test_match_with_long_suffix(self):
+        assert _filename_matches_known_publication("FT How to Spend it 7.3.26.pdf") is True
+
+    def test_no_boundary_no_match(self):
+        # "nationalgeo" has no separator before "geo" -- not a word-boundary
+        # match against "national geographic", so this must NOT match.
+        assert _filename_matches_known_publication("nationalgeo.pdf") is False
+
+    def test_separator_insensitive_match(self):
+        assert _filename_matches_known_publication("National_Geographic_USA.pdf") is True
+
+    def test_hyphen_separator_match(self):
+        assert _filename_matches_known_publication("The-Guardian-UK-18-June-2026.pdf") is True
+
+    def test_no_match_mid_filename(self):
+        assert _filename_matches_known_publication("Weekly FT Roundup.pdf") is False
+
+    def test_no_match_unrelated_title(self):
+        assert _filename_matches_known_publication("Laura Santini - Umami.epub") is False
+
+    def test_short_name_does_not_match_superstring_word(self):
+        assert _filename_matches_known_publication("draft.pdf") is False
+
+    def test_config_supplied_extra_name_matches(self):
+        assert _filename_matches_known_publication("Frankie Issue 108.pdf", extra_names=frozenset({"Frankie"})) is True
+
+    def test_config_supplied_extra_name_not_matched_without_being_passed(self):
+        assert _filename_matches_known_publication("Frankie Issue 108.pdf") is False
+
+    def test_built_in_list_excludes_common_word_time(self):
+        # "Time" is deliberately excluded from the built-in list (see spec) to
+        # avoid false-positiving on unrelated titles starting with the word.
+        assert _filename_matches_known_publication("Time Management for Busy People.epub") is False

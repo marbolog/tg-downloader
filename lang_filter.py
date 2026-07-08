@@ -123,6 +123,46 @@ _COMPACT_LONGDATE_RE = re.compile(
     r"(?<!\d)(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?!\d)"
 )
 
+# Publications observed in this library's downloaded files that carry no date
+# anywhere in the filename (e.g. "FT US.pdf", "NatGeo.pdf") -- there is no date
+# signal to key off for these, so filename identity is the only option. Common
+# single dictionary-word names (e.g. "Time") are deliberately excluded: they'd
+# false-positive on unrelated titles that happen to start with the same word,
+# and in practice such files are already caught by the compact-date regex
+# above (e.g. "Time_2601.pdf" -> "2601" validates as a DDMM date).
+_KNOWN_PUBLICATION_NAMES = frozenset({
+    "ft", "financial times", "nyt", "new york times", "wapo", "washington post",
+    "national geographic", "new scientist", "the guardian", "the economist",
+    "wsj", "wall street journal", "vogue", "the week", "the new yorker",
+    "happiful", "the simple things", "usa today", "newsweek", "new york post",
+    "the independent", "toronto star", "der spiegel", "le monde",
+    "corriere della sera", "el pais",
+})
+
+_PUBLICATION_EXT_RE = re.compile(r"\.(pdf|epub)$", re.IGNORECASE)
+_PUBLICATION_SEP_RE = re.compile(r"[_\-]+")
+_PUBLICATION_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_for_publication_match(filename: str) -> str:
+    stem = _PUBLICATION_EXT_RE.sub("", filename)
+    stem = _PUBLICATION_SEP_RE.sub(" ", stem)
+    return _PUBLICATION_WS_RE.sub(" ", stem).strip().lower()
+
+
+def _filename_matches_known_publication(filename: str, extra_names: frozenset[str] = frozenset()) -> bool:
+    """Return True if filename starts with a known publication name.
+
+    Matches only at the start of the normalized filename (lowercased,
+    extension stripped, separators collapsed to single spaces), followed by
+    either end-of-string or a space -- never mid-word and never elsewhere in
+    the filename. extra_names (from config.yaml's filters.newspaper_names) is
+    checked in addition to the built-in list, never in place of it.
+    """
+    normalized = _normalize_for_publication_match(filename)
+    names = _KNOWN_PUBLICATION_NAMES | {n.lower() for n in extra_names}
+    return any(normalized == name or normalized.startswith(name + " ") for name in names)
+
 _NEWSPAPER_PAGE_RATIO = 0.5   # fraction of sampled pages/chapters needing a dateline
 _NEWSPAPER_MIN_PAGES = 4      # below this sample size the ratio is too noisy to trust
 
