@@ -368,13 +368,11 @@ def cmd_scan_languages(db: Database) -> None:
 
 
 def cmd_scan_topics(db: Database, config: dict) -> None:
-    from lang_filter import compile_topic_patterns, detect_topic
+    from lang_filter import FilterSettings, compile_topic_patterns, detect_topic
 
-    topic_keywords = config["filters"].get("discard_topics") or {}
-    topic_min_matches = config["filters"].get("topic_min_matches", 2)
-    topic_min_occurrences = config["filters"].get("topic_min_keyword_occurrences", 1)
+    filters = FilterSettings.from_config(config)
 
-    if not topic_keywords:
+    if not filters.topic_keywords:
         console.print("[yellow]No discard_topics configured — nothing to scan.[/yellow]")
         return
 
@@ -383,16 +381,20 @@ def cmd_scan_topics(db: Database, config: dict) -> None:
         console.print("[yellow]No downloaded files found.[/yellow]")
         return
 
-    console.print(f"[dim]Scanning {len(items)} file(s) against {len(topic_keywords)} topic(s)…[/dim]")
+    console.print(f"[dim]Scanning {len(items)} file(s) against {len(filters.topic_keywords)} topic(s)…[/dim]")
 
-    compiled = compile_topic_patterns(topic_keywords)
+    compiled = compile_topic_patterns(filters.topic_keywords)
     counts: dict[str, int] = {}
     discarded = 0
 
     def handle(item, path):
         nonlocal discarded
         ext = (item.get("ext") or "").lower()
-        topic = detect_topic(path, ext, topic_keywords, topic_min_matches, topic_min_occurrences, compiled_patterns=compiled)
+        topic = detect_topic(
+            path, ext, filters.topic_keywords,
+            filters.topic_min_matches, filters.topic_min_occurrences,
+            compiled_patterns=compiled,
+        )
         if topic:
             path.unlink(missing_ok=True)
             db.mark_discarded(item["id"])
@@ -423,9 +425,9 @@ def cmd_scan_topics(db: Database, config: dict) -> None:
 
 
 def cmd_scan_newspapers(db: Database, config: dict) -> None:
-    from lang_filter import detect_newspaper
+    from lang_filter import FilterSettings, detect_newspaper
 
-    newspaper_names = frozenset(config["filters"].get("newspaper_names") or [])
+    filters = FilterSettings.from_config(config)
 
     items = db.get_downloaded_media()
     if not items:
@@ -439,7 +441,7 @@ def cmd_scan_newspapers(db: Database, config: dict) -> None:
     def handle(item, path):
         nonlocal discarded
         ext = (item.get("ext") or "").lower()
-        if detect_newspaper(path, ext, newspaper_names):
+        if detect_newspaper(path, ext, filters.newspaper_names):
             path.unlink(missing_ok=True)
             db.mark_discarded(item["id"])
             discarded += 1

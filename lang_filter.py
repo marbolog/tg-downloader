@@ -37,6 +37,7 @@ Newspaper/periodical detection:
 import logging
 import re
 import zipfile
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -174,6 +175,30 @@ _NEWSPAPER_MIN_PAGES = 4      # below this sample size the ratio is too noisy to
 CompiledPatterns = dict[str, list[tuple[str, re.Pattern]]]
 
 
+@dataclass(frozen=True)
+class FilterSettings:
+    """All post-download content-filter settings, bundled so they travel as one
+    value from config.yaml through the listener into download_item/analyze_file
+    instead of five parallel parameters on every signature in between."""
+
+    topic_keywords: dict[str, list[str]] = field(default_factory=dict)
+    topic_min_matches: int = 2
+    topic_min_occurrences: int = 1
+    discard_newspapers: bool = False
+    newspaper_names: frozenset[str] = frozenset()
+
+    @classmethod
+    def from_config(cls, config: dict) -> "FilterSettings":
+        f = config["filters"]
+        return cls(
+            topic_keywords=f.get("discard_topics") or {},
+            topic_min_matches=f.get("topic_min_matches", 2),
+            topic_min_occurrences=f.get("topic_min_keyword_occurrences", 1),
+            discard_newspapers=f.get("discard_newspapers", False),
+            newspaper_names=frozenset(f.get("newspaper_names") or []),
+        )
+
+
 def compile_topic_patterns(topic_keywords: dict[str, list[str]]) -> CompiledPatterns:
     """Pre-compile topic regex patterns. Call once before scanning many files."""
     return {
@@ -188,13 +213,9 @@ def compile_topic_patterns(topic_keywords: dict[str, list[str]]) -> CompiledPatt
 def analyze_file(
     file_path: Path,
     ext: str,
-    topic_keywords: dict[str, list[str]] | None = None,
-    topic_min_matches: int = 2,
-    topic_min_occurrences: int = 1,
+    filters: FilterSettings,
     *,
     compiled_patterns: CompiledPatterns | None = None,
-    discard_newspapers: bool = False,
-    newspaper_names: frozenset[str] = frozenset(),
 ) -> tuple[str | None, str | None, bool]:
     """Extract text once and return (language, matched_topic, is_newspaper).
 
@@ -204,8 +225,8 @@ def analyze_file(
     larger page sample (_PDF_TOPIC_PAGES) and includes document metadata, which
     also gives langdetect more signal.
     """
-    has_topics = bool(topic_keywords or compiled_patterns)
-    needs_pages = has_topics or discard_newspapers
+    has_topics = bool(filters.topic_keywords or compiled_patterns)
+    needs_pages = has_topics or filters.discard_newspapers
 
     if needs_pages:
         # Single open of the file; split output so each detector gets the right slice.
@@ -226,12 +247,12 @@ def analyze_file(
 
     topic = None
     if has_topics:
-        patterns = compiled_patterns or compile_topic_patterns(topic_keywords or {})
-        topic = _run_topic_detection(file_path.name, topic_text, patterns, topic_min_matches, topic_min_occurrences)
+        patterns = compiled_patterns or compile_topic_patterns(filters.topic_keywords)
+        topic = _run_topic_detection(file_path.name, topic_text, patterns, filters.topic_min_matches, filters.topic_min_occurrences)
 
     is_newspaper = False
-    if discard_newspapers and ext in ("pdf", "epub"):
-        is_newspaper = _looks_like_newspaper(file_path.name, pages, newspaper_names)
+    if filters.discard_newspapers and ext in ("pdf", "epub"):
+        is_newspaper = _looks_like_newspaper(file_path.name, pages, filters.newspaper_names)
         if is_newspaper:
             log.debug(f"{file_path.name}: detected as newspaper/periodical")
 

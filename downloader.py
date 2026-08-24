@@ -5,8 +5,8 @@ from pathlib import Path
 from telethon import TelegramClient
 
 from db import Database
-from lang_filter import DISCARD_LANG, analyze_file
-from utils import compute_sha256, human_size, unique_path
+from lang_filter import DISCARD_LANG, FilterSettings, analyze_file
+from utils import compute_sha256, create_tracked_task, human_size, unique_path
 
 log = logging.getLogger(__name__)
 
@@ -17,13 +17,9 @@ async def download_item(
     item: dict,
     dest: Path,
     semaphore: asyncio.Semaphore,
+    filters: FilterSettings,
     *,
     message=None,
-    topic_keywords: dict | None = None,
-    topic_min_matches: int = 2,
-    topic_min_occurrences: int = 1,
-    discard_newspapers: bool = False,
-    newspaper_names: frozenset[str] = frozenset(),
 ) -> bool:
     """Download one media item to dest. Returns True on success.
 
@@ -55,11 +51,7 @@ async def download_item(
 
             ext = item.get("ext") or ""
 
-            lang, topic, is_newspaper = analyze_file(
-                filepath, ext, topic_keywords, topic_min_matches, topic_min_occurrences,
-                discard_newspapers=discard_newspapers,
-                newspaper_names=newspaper_names,
-            )
+            lang, topic, is_newspaper = analyze_file(filepath, ext, filters)
 
             if lang == DISCARD_LANG:
                 filepath.unlink(missing_ok=True)
@@ -90,7 +82,7 @@ async def download_item(
             lang_tag = f" [{lang}]" if lang else ""
             log.info(f"[{label}] Downloaded: {item['filename']}  ({size_str}){lang_tag}")
 
-            asyncio.create_task(_index_async(
+            create_tracked_task(_index_async(
                 db,
                 item["id"],
                 str(filepath),

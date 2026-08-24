@@ -4,7 +4,42 @@ No tests here require real PDF/EPUB file fixtures — those functions are
 verified manually (see docs/superpowers/plans/2026-07-06-newspaper-filter.md).
 """
 
-from lang_filter import _filename_matches_known_publication, _looks_like_newspaper
+from lang_filter import FilterSettings, _filename_matches_known_publication, _looks_like_newspaper
+
+
+class TestFilterSettings:
+    def test_from_config_reads_all_keys(self):
+        cfg = {
+            "filters": {
+                "discard_topics": {"cars": ["ferrari", "horsepower"]},
+                "topic_min_matches": 3,
+                "topic_min_keyword_occurrences": 2,
+                "discard_newspapers": True,
+                "newspaper_names": ["Il Foglio"],
+            }
+        }
+        fs = FilterSettings.from_config(cfg)
+        assert fs.topic_keywords == {"cars": ["ferrari", "horsepower"]}
+        assert fs.topic_min_matches == 3
+        assert fs.topic_min_occurrences == 2
+        assert fs.discard_newspapers is True
+        assert fs.newspaper_names == frozenset({"Il Foglio"})
+
+    def test_from_config_defaults_on_empty_filters(self):
+        fs = FilterSettings.from_config({"filters": {}})
+        assert fs.topic_keywords == {}
+        assert fs.topic_min_matches == 2
+        assert fs.topic_min_occurrences == 1
+        assert fs.discard_newspapers is False
+        assert fs.newspaper_names == frozenset()
+
+    def test_from_config_null_yaml_values(self):
+        # `discard_topics:` / `newspaper_names:` left empty in YAML parse as None.
+        fs = FilterSettings.from_config(
+            {"filters": {"discard_topics": None, "newspaper_names": None}}
+        )
+        assert fs.topic_keywords == {}
+        assert fs.newspaper_names == frozenset()
 
 
 class TestLooksLikeNewspaper:
