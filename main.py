@@ -99,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("scan-hashes", help="Compute SHA-256 for downloaded files without a hash (enables duplicate detection)")
 
-    sub.add_parser("index", help="Index downloaded files into the RAG vector store")
+    sub.add_parser("index", help="Index downloaded files into the FTS5 search table")
 
     return parser
 

@@ -101,13 +101,6 @@ class TestApplyDefaults:
         _apply_defaults(raw)
         assert raw["filters"]["discard_newspapers"] is False
 
-    def test_rag_defaults_applied(self):
-        raw = _minimal_valid()
-        _apply_defaults(raw)
-        assert raw["rag"]["enabled"] is False
-        assert "index_path" in raw["rag"]
-        assert raw["rag"]["top_k"] == 5
-
 
 class TestLoadConfig:
     def test_missing_file_exits(self, tmp_path):

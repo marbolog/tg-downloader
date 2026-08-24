@@ -273,7 +273,7 @@ app commands (proxied into the running container):
   scan-topics                 Apply topic filters from config to downloaded files; discard matches
   scan-newspapers              Detect newspaper/periodical-shaped files; discard matches
   scan-hashes                 Compute SHA-256 hashes for files; enables duplicate detection in web UI
-  index                       Index all downloaded files into the RAG vector store
+  index                       Index all downloaded files into the FTS5 search table
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
