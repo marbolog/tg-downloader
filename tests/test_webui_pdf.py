@@ -17,6 +17,7 @@ def _client(tmp_path, monkeypatch):
     monkeypatch.chdir(WEBUI_DIR)                       # so StaticFiles("static") resolves
     monkeypatch.setenv("DB_PATH", str(tmp_path / "t.db"))
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    monkeypatch.delenv("WEBUI_PASSWORD", raising=False)  # auth is tested in test_webui_auth.py
     if str(WEBUI_DIR) not in sys.path:
         sys.path.insert(0, str(WEBUI_DIR))
     sys.modules.pop("app", None)

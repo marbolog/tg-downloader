@@ -16,6 +16,11 @@ services:
       dockerfile: webui/Dockerfile
     container_name: tg-webui
     restart: always
+    environment:
+      # Set WEBUI_PASSWORD (e.g. in a .env file next to this compose file) to
+      # require HTTP Basic Auth on the web UI. Empty = no auth (trusted LAN).
+      WEBUI_USERNAME: ${WEBUI_USERNAME:-tg}
+      WEBUI_PASSWORD: ${WEBUI_PASSWORD:-}
     ports:
       - "8090:8080"
     volumes:

@@ -1,10 +1,12 @@
+import base64
 import io
 import logging
 import os
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from rich.logging import RichHandler
@@ -24,9 +26,37 @@ log = logging.getLogger(__name__)
 DB_PATH = Path(os.environ.get("DB_PATH", "/app/data/tg_downloader.db"))
 THUMBS_DIR = Path(os.environ.get("THUMBS_DIR", "/app/data/thumbs"))
 SEARCH_TOP_K = int(os.environ.get("SEARCH_TOP_K", "8"))
+# HTTP Basic Auth, enabled by setting WEBUI_PASSWORD. Basic (not a bearer token)
+# because the frontend loads thumbnails via <img src> and PDFs via pdf.js Range
+# requests — neither can attach a custom header, but the browser attaches cached
+# Basic credentials to all same-origin requests automatically, so the vanilla-JS
+# frontend needs no changes. Unset = no auth (trusted-LAN default).
+WEBUI_USERNAME = os.environ.get("WEBUI_USERNAME", "tg")
+WEBUI_PASSWORD = os.environ.get("WEBUI_PASSWORD", "")
 
 app = FastAPI()
 db = Database(str(DB_PATH))
+
+
+@app.middleware("http")
+async def require_basic_auth(request: Request, call_next):
+    if not WEBUI_PASSWORD:
+        return await call_next(request)
+    header = request.headers.get("authorization", "")
+    if header.startswith("Basic "):
+        try:
+            username, _, password = base64.b64decode(header[6:]).decode().partition(":")
+            # compare_digest resists timing attacks; check both fields unconditionally.
+            user_ok = secrets.compare_digest(username, WEBUI_USERNAME)
+            pass_ok = secrets.compare_digest(password, WEBUI_PASSWORD)
+            if user_ok and pass_ok:
+                return await call_next(request)
+        except Exception:
+            pass  # malformed base64/utf-8 → fall through to 401
+    return Response(
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="tg-downloader"'},
+    )
 
 
 @app.get("/api/languages")
