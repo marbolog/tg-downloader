@@ -85,12 +85,12 @@ uv run python main.py <command>
 |---|---|
 | `main.py` | Entry point; CLI subcommands (`listen`, `subscribe`, `unsubscribe`, `channels`, `discard`, `status`, `history`, `scrape`) |
 | `config.py` | Load and validate `config.yaml` |
-| `db.py` | SQLite schema and all query methods (`Database` class) |
+| `db.py` | SQLite schema and all query methods (`Database` class); WAL mode + 5s `busy_timeout` per connection (listener and webui containers write concurrently) |
 | `listener.py` | Real-time listener; auto-downloads on arrival; startup backfill + flush pending; hourly retention cleanup |
 | `lang_filter.py` | Post-download language detection; auto-discards German files |
 | `ui.py` | Interactive `select_discard` checkbox UI (InquirerPy) |
 | `downloader.py` | `download_item` — single-file daemon-mode download via Telethon |
-| `utils.py` | Pure helpers: `human_size`, `unique_path` |
+| `utils.py` | Shared helpers: `human_size`, `unique_path`, `compute_sha256`, `create_tracked_task` (asyncio fire-and-forget with strong reference + death logging) |
 | `tgdctl.py` | Host-side management CLI; wraps docker compose + proxies app commands |
 | `config.yaml.example` | Template config — copy to `config.yaml` to start |
 | `webui/app.py` | FastAPI web UI — file grid with cover previews, discard, download. Uses the shared `Database` class (not raw SQL); the Dockerfile copies `db.py` into the image. All SQL lives in `db.py`. |
@@ -143,7 +143,7 @@ http://RASPBERRY_PI_IP:8090
 Features:
 - Responsive card grid with cover thumbnails (PDF first page, EPUB cover image)
 - Click cards to select; Select All / Clear buttons
-- Delete Selected — permanently removes files from disk and marks `discarded` in DB
+- Delete Selected — permanently removes files from disk and marks `discarded` in DB. `POST /api/discard` batches the whole selection into a single `db.mark_discarded_many()` transaction rather than one per file — with the listener writing to the same SQLite DB concurrently, a per-file transaction loop meant every file in a large batch was its own chance to hit `sqlite3.OperationalError: database is locked`, aborting the request mid-batch and, since the code unlinked each file from disk *before* recording the discard, leaving deleted files still marked `downloaded` in the DB (which the listener's "heal missing" step would then silently re-download). The DB write now happens once, before any disk unlink, and a lock error surfaces as a clean `503` instead of an unhandled `500`.
 - Per-card Download button — downloads the file to the browser
 - Filter by channel and by language; pagination (60 per page)
 - Language badge on each card (ISO code chip, color-coded by language)
@@ -161,6 +161,8 @@ Full-text search over the downloaded library. Always enabled — zero startup co
 - Only `pdf` and `epub` are indexed; other formats are skipped silently
 - `index_file` sets `media_messages.indexed_at` after every completed attempt — including image-only/scanned PDFs that yield no text (no chunks). `search_fts_missing_media_ids()` excludes any row with `indexed_at IS NOT NULL`, so the startup heal does not re-scan textless PDFs on every restart (previously it re-attempted them forever, e.g. ~569 image PDFs taking ~6 min each boot). Files that *raise* during PDF parsing (e.g. "malformed page tree") still fall through unmarked and will retry — minor, low-volume.
 - Web UI exposes `GET /api/search?q=` (FTS5)
+
+**Auth**: optional HTTP Basic Auth, enabled by setting `WEBUI_PASSWORD` (and optionally `WEBUI_USERNAME`, default `tg`) — e.g. in a `.env` file next to `docker-compose.yml`. Unset = no auth (trusted-LAN default). Basic Auth (not a bearer token) was chosen because thumbnails load via `<img src>` and PDFs via pdf.js Range requests, which can't attach custom headers; the browser attaches cached Basic credentials to all same-origin requests automatically, so the frontend needs no changes.
 
 ### Container behaviour
 - `restart: always` — containers restart automatically on crash or server reboot
@@ -229,7 +231,9 @@ Detection is a format signal, not a subject-matter one — unlike `discard_topic
 
 Formats with no text extraction support (MOBI, AZW3, CBR, CBZ, DJVU, FB2) are always kept; filters only apply to `pdf` and `epub`.
 
-**Critical**: the item dict passed to `download_item` must include `"ext"`. Both `_backfill_missed` and `_handle` in `listener.py` explicitly set this field; `_flush_pending` gets it from the full DB row automatically.
+All filter settings travel as one frozen `lang_filter.FilterSettings` dataclass (built once via `FilterSettings.from_config(config)` in `run_listener` and the scan commands) rather than as individual parameters — adding a new filter key means extending the dataclass, not every signature between config and `analyze_file`. The record-then-download step shared by real-time handling, hourly backfill, and deep reconcile lives in `listener._record_and_download()`.
+
+**Critical**: the item dict passed to `download_item` must include `"ext"`. `_record_and_download` in `listener.py` sets this field for all Telegram-message paths; `_flush_pending` / `_heal_missing` get it from the full DB row automatically.
 
 The detected language is stored in `media_messages.language` (ISO 639-1 code, nullable — `NULL` means undetected or unsupported format). Files that existed before this feature was added have `language = NULL`. New downloads are tagged automatically.
 
