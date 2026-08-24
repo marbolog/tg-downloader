@@ -67,6 +67,10 @@ class Database:
     def _conn(self):
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
+        # The listener and webui containers write to this DB concurrently. SQLite's
+        # default busy timeout is 0, so any write-lock contention raises
+        # "database is locked" immediately; wait up to 5s instead.
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             yield conn
             conn.commit()
@@ -214,12 +218,30 @@ class Database:
             )
 
     def mark_discarded(self, media_id: int) -> None:
+        self.mark_discarded_many([media_id])
+
+    def mark_discarded_many(self, media_ids: list[int]) -> None:
+        """Batch version of mark_discarded -- one connection/transaction for the
+        whole list, not one per id.
+
+        The web UI's bulk delete calls this once per request instead of looping
+        per id: with the listener writing to the same DB concurrently, each id
+        used to be its own lock-acquisition attempt, so a large batch was
+        effectively daring `busy_timeout` to fail once out of N tries. A single
+        transaction takes that risk once and is atomic -- no id is left
+        half-updated if it does hit "database is locked"."""
+        if not media_ids:
+            return
+        placeholders = ",".join("?" * len(media_ids))
         with self._conn() as conn:
             conn.execute(
-                "UPDATE media_messages SET status='discarded', local_path=NULL WHERE id=?",
-                (media_id,),
+                f"UPDATE media_messages SET status='discarded', local_path=NULL WHERE id IN ({placeholders})",
+                media_ids,
             )
-            conn.execute("DELETE FROM search_fts WHERE media_id = ?", (str(media_id),))
+            conn.execute(
+                f"DELETE FROM search_fts WHERE media_id IN ({placeholders})",
+                [str(i) for i in media_ids],
+            )
 
     def mark_expired(self, media_id: int) -> None:
         with self._conn() as conn:

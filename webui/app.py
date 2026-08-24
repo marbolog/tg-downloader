@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import secrets
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -176,17 +177,28 @@ class DiscardRequest(BaseModel):
 
 @app.post("/api/discard")
 def discard_files(req: DiscardRequest):
+    if not req.ids:
+        return {"deleted": 0, "total": 0}
+
+    # Read local_path before mark_discarded_many clears it in the DB.
+    local_paths = {row["id"]: row["local_path"] for row in db.list_downloaded_files(ids=req.ids)}
+
+    try:
+        # One transaction for the whole batch -- see mark_discarded_many's
+        # docstring for why per-id transactions caused intermittent 500s here.
+        db.mark_discarded_many(req.ids)
+    except sqlite3.OperationalError as exc:
+        log.error(f"Discard failed for {len(req.ids)} files: {exc}")
+        raise HTTPException(status_code=503, detail="Database busy, please try again") from exc
+
     deleted_files = 0
     for file_id in req.ids:
-        row = db.get_media(file_id)
-        if row and row["local_path"]:
-            p = Path(row["local_path"])
+        local_path = local_paths.get(file_id)
+        if local_path:
+            p = Path(local_path)
             if p.exists():
                 p.unlink()
                 deleted_files += 1
-        # mark_discarded sets status='discarded', clears local_path, and removes
-        # the file's rows from search_fts in one transaction.
-        db.mark_discarded(file_id)
         thumb = THUMBS_DIR / f"{file_id}.jpg"
         if thumb.exists():
             thumb.unlink()

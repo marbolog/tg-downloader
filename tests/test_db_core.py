@@ -113,6 +113,29 @@ class TestStatusLifecycle:
         db.mark_discarded(mid)
         assert db.search_fts_query("discardable") == []
 
+    def test_mark_discarded_many_sets_status_and_clears_path_for_all(self, db):
+        ch = _add_channel(db)
+        ids = [_insert_downloaded(db, ch, msg_id=i) for i in range(1, 4)]
+        db.mark_discarded_many(ids)
+        with db._conn() as conn:
+            rows = conn.execute(
+                f"SELECT status, local_path FROM media_messages WHERE id IN ({','.join('?' * len(ids))})",
+                ids,
+            ).fetchall()
+        assert len(rows) == 3
+        assert all(r["status"] == "discarded" and r["local_path"] is None for r in rows)
+
+    def test_mark_discarded_many_removes_fts_rows_for_all(self, db):
+        ch = _add_channel(db)
+        ids = [_insert_downloaded(db, ch, msg_id=i) for i in (1, 2)]
+        for mid in ids:
+            db.search_fts_index_file(mid, [{"chunk_idx": 0, "page": 1, "chapter": None, "text": "batchdiscardable content"}], "f.pdf")
+        db.mark_discarded_many(ids)
+        assert db.search_fts_query("batchdiscardable") == []
+
+    def test_mark_discarded_many_empty_list_is_a_noop(self, db):
+        db.mark_discarded_many([])  # must not raise (empty IN (...) is invalid SQL)
+
     def test_save_media_message_duplicate_returns_none(self, db):
         ch = _add_channel(db)
         db.save_media_message(
