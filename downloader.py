@@ -20,6 +20,7 @@ async def download_item(
     filters: FilterSettings,
     *,
     message=None,
+    timeout_seconds: int = 600,
 ) -> bool:
     """Download one media item to dest. Returns True on success.
 
@@ -30,24 +31,38 @@ async def download_item(
     and no Telegram fetch is needed.
 
     The file is indexed via FTS5 after a successful download in a background asyncio task.
+
+    Entity resolution, message lookup, and the media download itself are bounded
+    by timeout_seconds. Without this, a single stalled network call hangs forever:
+    _flush_pending/_heal_missing/_backfill_missed in listener.py are awaited before
+    the heartbeat loop or any other background task starts, so one frozen download
+    at startup silently blocked every channel for days (observed 2026-08-21..26)
+    with no crash and no restart, since docker's restart:always only reacts to the
+    process exiting.
     """
     async with semaphore:
         filepath = unique_path(dest / item["filename"])
         label = item.get("channel_title") or item.get("channel_identifier") or str(item.get("channel_telegram_id", "?"))
-        try:
+
+        async def _fetch_and_download():
+            nonlocal message
             if message is None:
                 identifier = item.get("channel_identifier") or item["channel_telegram_id"]
                 entity = await client.get_entity(identifier)
                 message = await client.get_messages(entity, ids=item["message_id"])
-                if message is None:
-                    db.mark_discarded(item["id"])
-                    log.warning(
-                        f"[{label}] Message {item['message_id']} not found on Telegram "
-                        f"(deleted?) -- {item['filename']!r} marked discarded"
-                    )
-                    return True
+            if message is not None:
+                await client.download_media(message, file=str(filepath))
 
-            await client.download_media(message, file=str(filepath))
+        try:
+            await asyncio.wait_for(_fetch_and_download(), timeout=timeout_seconds)
+
+            if message is None:
+                db.mark_discarded(item["id"])
+                log.warning(
+                    f"[{label}] Message {item['message_id']} not found on Telegram "
+                    f"(deleted?) -- {item['filename']!r} marked discarded"
+                )
+                return True
 
             ext = item.get("ext") or ""
 
@@ -92,6 +107,11 @@ async def download_item(
             ))
 
             return True
+        except asyncio.TimeoutError:
+            log.error(
+                f"[{label}] Timed out after {timeout_seconds}s downloading {item['filename']!r}"
+            )
+            return False
         except Exception as exc:
             log.error(f"[{label}] Failed to download {item['filename']!r}: {exc}")
             return False

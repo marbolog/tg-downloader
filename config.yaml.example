@@ -12,6 +12,7 @@ download:
   destination: "data/downloads"   # where downloaded files are saved
   retention_days: 365             # delete files from disk after this many days (0 = never)
   concurrent_downloads: 1         # parallel downloads; keep at 1 on Raspberry Pi (MTProto AES pegs ARM cores)
+  timeout_seconds: 600            # per-file network timeout (entity/message lookup + download); bounds a stalled connection
 
 # Optional: only track media with these extensions. Empty = track everything.
 filters:

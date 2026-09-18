@@ -9,6 +9,40 @@ services:
       - /srv/share/tg-downloads:/srv/share/tg-downloads
     stdin_open: true
     tty: true
+    labels:
+      # Watched by the `autoheal` service below -- only containers carrying this
+      # label get auto-restarted on an unhealthy healthcheck.
+      - "autoheal=true"
+    healthcheck:
+      # listener.py touches data/.heartbeat once startup finishes and again every
+      # hourly heartbeat. A stale file means the process is alive but hung (e.g. a
+      # stalled network call outside listener.py's own timeout, or a synchronous
+      # PDF-parsing call blocking the event loop) -- `restart: always` alone does
+      # nothing for that, since it only reacts to the process exiting. `autoheal`
+      # (below) is what actually turns an unhealthy status into a restart.
+      test: ["CMD", "python", "-c", "import pathlib,sys,time; p=pathlib.Path('data/.heartbeat'); sys.exit(0 if p.exists() and time.time()-p.stat().st_mtime < 5400 else 1)"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 30m
+
+  # Restarts any container labeled `autoheal=true` whose Docker healthcheck
+  # reports unhealthy -- plain `restart: always` only reacts to the process
+  # exiting, not to a hung-but-alive one (see tg-downloader's healthcheck
+  # comment and the 2026-08-21..26 incident note in CLAUDE.md). Needs the
+  # Docker socket to call `docker restart`, which hands it meaningful control
+  # over the whole Docker host; acceptable here since it's a single-purpose,
+  # widely-used image (github.com/willfarrell/docker-autoheal) on a private Pi.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: tg-autoheal
+    restart: always
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 30
+      AUTOHEAL_START_PERIOD: 60
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   webui:
     build:

@@ -12,6 +12,21 @@ from utils import create_tracked_task
 
 log = logging.getLogger(__name__)
 
+# Touched once startup (flush/heal/backfill) completes, then every heartbeat.
+# The Docker healthcheck (docker-compose.yml) checks this file's mtime -- a
+# stale file means the listener is hung, not just quiet. Plain `restart: always`
+# only reacts to the process exiting, which does nothing for a deadlocked-but-alive
+# process (observed 2026-08-21..26: a single stalled download blocked every
+# channel for 5 days with the container reporting "Up" the whole time).
+HEARTBEAT_FILE = Path("data/.heartbeat")
+
+
+def _touch_heartbeat() -> None:
+    try:
+        HEARTBEAT_FILE.touch()
+    except OSError as exc:
+        log.warning(f"Could not touch heartbeat file {HEARTBEAT_FILE}: {exc}")
+
 
 async def run_listener(client: TelegramClient, db: Database, config: dict) -> None:
     """Start the real-time listener. Blocks until the client disconnects."""
@@ -19,23 +34,25 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     allowed = set(config["filters"]["extensions"])
     retention_days = config["download"]["retention_days"]
     concurrent_downloads = config["download"]["concurrent_downloads"]
+    timeout_seconds = config["download"]["timeout_seconds"]
     filters = FilterSettings.from_config(config)
     destination.mkdir(parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(concurrent_downloads)
 
-    await _flush_pending(client, db, destination, semaphore, filters)
-    await _heal_missing(client, db, destination, semaphore, filters)
-    await _backfill_missed(client, db, allowed, destination, semaphore, filters)
+    await _flush_pending(client, db, destination, semaphore, filters, timeout_seconds)
+    await _heal_missing(client, db, destination, semaphore, filters, timeout_seconds)
+    await _backfill_missed(client, db, allowed, destination, semaphore, filters, timeout_seconds)
+    _touch_heartbeat()
 
     create_tracked_task(_heal_search_index(db), name="heal_search_index")
     create_tracked_task(_cleanup_loop(db, retention_days), name="cleanup_loop")
     create_tracked_task(_heartbeat_loop(db), name="heartbeat_loop")
     create_tracked_task(
-        _backfill_loop(client, db, allowed, destination, semaphore, filters),
+        _backfill_loop(client, db, allowed, destination, semaphore, filters, timeout_seconds),
         name="backfill_loop",
     )
     create_tracked_task(
-        _deep_reconcile_loop(client, db, allowed, destination, semaphore, filters),
+        _deep_reconcile_loop(client, db, allowed, destination, semaphore, filters, timeout_seconds),
         name="deep_reconcile_loop",
     )
 
@@ -47,7 +64,7 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
     @client.on(events.NewMessage)
     async def on_new_message(event):
         try:
-            await _handle(event, db, allowed, client, destination, semaphore, filters)
+            await _handle(event, db, allowed, client, destination, semaphore, filters, timeout_seconds)
         except Exception as exc:
             log.error(f"Error handling message {event.message.id}: {exc}", exc_info=True)
 
@@ -60,7 +77,8 @@ async def run_listener(client: TelegramClient, db: Database, config: dict) -> No
 
 
 def _record_and_download(
-    client, db, channel: dict, message, allowed, dest, semaphore, filters: FilterSettings
+    client, db, channel: dict, message, allowed, dest, semaphore, filters: FilterSettings,
+    timeout_seconds: int,
 ):
     """Record a message's media in the DB; return a download coroutine if it is new.
 
@@ -101,24 +119,50 @@ def _record_and_download(
         "size": item_meta["size"],
         "ext": item_meta["ext"],
     }
-    return download_item(client, db, item, dest, semaphore, filters, message=message)
+    return download_item(
+        client, db, item, dest, semaphore, filters, message=message, timeout_seconds=timeout_seconds
+    )
 
 
-async def _flush_pending(client, db, dest, semaphore, filters: FilterSettings) -> None:
+async def _gather_with_heartbeat(coros) -> list:
+    """Run download coroutines concurrently, touching the heartbeat file as each
+    one finishes.
+
+    A plain asyncio.gather only resolves once the *whole* batch is done, so a
+    long backlog flush (many files, serialized behind concurrent_downloads=1)
+    looks identical to a hang from the healthcheck's point of view until the
+    very last item completes. Incident 2026-08-26: autoheal restarted the
+    listener mid-recovery because a 64-item flush took longer than
+    start_period, throwing away ~30 minutes of progress and restarting the
+    flush from scratch (safe -- already-downloaded items are marked in the DB
+    and skipped -- but wasteful, and it would repeat every start_period until
+    the backlog happened to shrink enough to finish in time). Touching the
+    heartbeat per item makes forward progress itself the health signal."""
+    results = []
+    for fut in asyncio.as_completed(list(coros)):
+        try:
+            results.append(await fut)
+        except Exception as exc:
+            results.append(exc)
+        _touch_heartbeat()
+    return results
+
+
+async def _flush_pending(client, db, dest, semaphore, filters: FilterSettings, timeout_seconds: int) -> None:
     """Download all items that are pending in the DB (e.g. from a previous scrape)."""
     pending = db.get_pending_media()
     if not pending:
         return
     log.info(f"Flushing {len(pending)} pending item(s) from previous session(s)...")
-    results = await asyncio.gather(
-        *[download_item(client, db, item, dest, semaphore, filters) for item in pending],
-        return_exceptions=True,
+    results = await _gather_with_heartbeat(
+        download_item(client, db, item, dest, semaphore, filters, timeout_seconds=timeout_seconds)
+        for item in pending
     )
     ok = sum(1 for r in results if r is True)
     log.info(f"Flush complete: {ok}/{len(pending)} succeeded")
 
 
-async def _heal_missing(client, db, dest, semaphore, filters: FilterSettings) -> None:
+async def _heal_missing(client, db, dest, semaphore, filters: FilterSettings, timeout_seconds: int) -> None:
     """Re-download files marked 'downloaded' in the DB but absent from disk."""
     downloaded = db.get_downloaded_media()
     missing = [
@@ -128,16 +172,17 @@ async def _heal_missing(client, db, dest, semaphore, filters: FilterSettings) ->
     if not missing:
         return
     log.info(f"Healing {len(missing)} file(s) present in DB but missing from disk...")
-    results = await asyncio.gather(
-        *[download_item(client, db, item, dest, semaphore, filters) for item in missing],
-        return_exceptions=True,
+    results = await _gather_with_heartbeat(
+        download_item(client, db, item, dest, semaphore, filters, timeout_seconds=timeout_seconds)
+        for item in missing
     )
     ok = sum(1 for r in results if r is True)
     log.info(f"Heal complete: {ok}/{len(missing)} restored")
 
 
 async def _backfill_missed(
-    client, db, allowed, dest, semaphore, filters: FilterSettings, warn_empty: bool = True
+    client, db, allowed, dest, semaphore, filters: FilterSettings, timeout_seconds: int,
+    warn_empty: bool = True,
 ) -> None:
     """Fetch messages that arrived while the service was down and download them.
 
@@ -165,13 +210,15 @@ async def _backfill_missed(
         async for message in client.iter_messages(entity, min_id=max_id):
             if not message.media:
                 continue
-            coro = _record_and_download(client, db, ch, message, allowed, dest, semaphore, filters)
+            coro = _record_and_download(
+                client, db, ch, message, allowed, dest, semaphore, filters, timeout_seconds
+            )
             if coro:
                 tasks.append(coro)
 
         if tasks:
             log.info(f"Backfilling {len(tasks)} missed item(s) from {ch['title']}...")
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await _gather_with_heartbeat(tasks)
             ok = sum(1 for r in results if r is True)
             log.info(f"Backfill {ch['title']}: {ok}/{len(tasks)} succeeded")
 
@@ -226,11 +273,14 @@ async def _heartbeat_loop(db: Database) -> None:
                 f"discarded={s['discarded']} expired={s['expired']} "
                 f"channels_no_messages={s['channels_no_messages']}"
             )
+            _touch_heartbeat()
         except Exception as exc:
             log.error(f"Heartbeat error: {exc}", exc_info=True)
 
 
-async def _backfill_loop(client, db, allowed, dest, semaphore, filters: FilterSettings) -> None:
+async def _backfill_loop(
+    client, db, allowed, dest, semaphore, filters: FilterSettings, timeout_seconds: int
+) -> None:
     """Re-run backfill every hour as a safety net against silent update-stream
     stalls. Telethon's real-time update channel can go stale after a network blip
     while the TCP connection (and this asyncio loop) stays alive -- the process
@@ -243,7 +293,9 @@ async def _backfill_loop(client, db, allowed, dest, semaphore, filters: FilterSe
     while True:
         await asyncio.sleep(3600)
         try:
-            await _backfill_missed(client, db, allowed, dest, semaphore, filters, warn_empty=False)
+            await _backfill_missed(
+                client, db, allowed, dest, semaphore, filters, timeout_seconds, warn_empty=False
+            )
         except Exception as exc:
             log.error(f"Periodic backfill error: {exc}", exc_info=True)
 
@@ -259,18 +311,22 @@ RECONCILE_WINDOW = 400
 RECONCILE_INTERVAL_SECONDS = 86400  # daily
 
 
-async def _deep_reconcile_loop(client, db, allowed, dest, semaphore, filters: FilterSettings) -> None:
+async def _deep_reconcile_loop(
+    client, db, allowed, dest, semaphore, filters: FilterSettings, timeout_seconds: int
+) -> None:
     """Once a day, re-scan each channel's recent window ignoring the backfill
     watermark, recovering media that real-time delivery dropped mid-burst."""
     while True:
         await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
         try:
-            await _deep_reconcile(client, db, allowed, dest, semaphore, filters)
+            await _deep_reconcile(client, db, allowed, dest, semaphore, filters, timeout_seconds)
         except Exception as exc:
             log.error(f"Deep reconcile error: {exc}", exc_info=True)
 
 
-async def _deep_reconcile(client, db, allowed, dest, semaphore, filters: FilterSettings) -> None:
+async def _deep_reconcile(
+    client, db, allowed, dest, semaphore, filters: FilterSettings, timeout_seconds: int
+) -> None:
     for ch in db.list_channels():
         recorded = db.get_recorded_message_ids(ch["id"])
         if not recorded:
@@ -285,13 +341,15 @@ async def _deep_reconcile(client, db, allowed, dest, semaphore, filters: FilterS
         async for message in client.iter_messages(entity, limit=RECONCILE_WINDOW):
             if not message.media or message.id in recorded:
                 continue
-            coro = _record_and_download(client, db, ch, message, allowed, dest, semaphore, filters)
+            coro = _record_and_download(
+                client, db, ch, message, allowed, dest, semaphore, filters, timeout_seconds
+            )
             if coro:
                 tasks.append(coro)
 
         if tasks:
             log.info(f"Deep reconcile: recovered {len(tasks)} mid-burst miss(es) from {ch['title']}")
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await _gather_with_heartbeat(tasks)
             ok = sum(1 for r in results if r is True)
             log.info(f"Deep reconcile {ch['title']}: {ok}/{len(tasks)} downloaded")
 
@@ -326,7 +384,9 @@ def _run_cleanup(db: Database, retention_days: int) -> None:
     )
 
 
-async def _handle(event, db, allowed, client, dest, semaphore, filters: FilterSettings) -> None:
+async def _handle(
+    event, db, allowed, client, dest, semaphore, filters: FilterSettings, timeout_seconds: int
+) -> None:
     if not event.message.media:
         return
 
@@ -342,7 +402,9 @@ async def _handle(event, db, allowed, client, dest, semaphore, filters: FilterSe
     if channel is None:
         return
 
-    coro = _record_and_download(client, db, channel, event.message, allowed, dest, semaphore, filters)
+    coro = _record_and_download(
+        client, db, channel, event.message, allowed, dest, semaphore, filters, timeout_seconds
+    )
     if coro:
         create_tracked_task(coro, name=f"download_msg_{event.message.id}")
 
