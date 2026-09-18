@@ -31,5 +31,5 @@ tgdctl = "tgdctl:main"
 package = true
 
 [tool.setuptools]
-py-modules = ["main", "config", "db", "lang_filter", "listener", "ui", "downloader", "utils", "tgdctl"]
+py-modules = ["main", "config", "db", "lang_filter", "listener", "ui", "downloader", "utils", "tgdctl", "reader_document"]
 packages = ["search"]

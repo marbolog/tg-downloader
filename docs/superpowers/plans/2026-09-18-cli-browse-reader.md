@@ -245,7 +245,10 @@ def test_pdf_bookmark_targeting_skipped_page_uses_nearest_later_page():
     assert [e.section_index for e in doc.toc] == [1]  # section for page 3
 
 
-def test_pdf_bookmark_targeting_page_past_the_end_is_dropped():
+def test_pdf_bookmark_targeting_page_past_the_end_falls_back_to_default_toc():
+    # The one bookmark maps to nothing valid -- an empty TOC sidebar would be
+    # useless, so this falls back to the same per-page TOC used when a PDF has
+    # no outline at all, rather than leaving the reader with no navigation.
     mock_doc = MagicMock()
     mock_doc.get_toc.return_value = [[1, "Appendix", 99]]
     with patch("reader_document.chunk_file", return_value=_mock_pdf_chunks()), \
@@ -253,7 +256,7 @@ def test_pdf_bookmark_targeting_page_past_the_end_is_dropped():
         doc = build_document(Path("book.pdf"), "pdf")
 
     assert doc is not None
-    assert doc.toc == []  # no section at or after page 99 -- entry dropped
+    assert [e.title for e in doc.toc] == ["Page 1", "Page 2", "Page 3"]
 
 
 def test_pdf_with_no_extractable_text_returns_none():
