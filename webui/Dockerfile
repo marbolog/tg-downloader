@@ -7,6 +7,7 @@ RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
 COPY search/ ./search/
 COPY db.py ./
+COPY utils.py ./
 COPY webui/app.py ./
 COPY webui/static/ ./static/
 

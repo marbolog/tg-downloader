@@ -61,3 +61,28 @@ def unique_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
         i += 1
+
+
+def dedupe_by_hash(items: list[dict]) -> list[dict]:
+    """Keep one row per unique file (by SHA-256 hash, or filename+size when no
+    hash is recorded), annotated with copy_count.
+
+    Items are expected sorted newest-first (the DB's default ordering); the
+    kept representative is the lowest id (the oldest download of that file).
+    """
+    groups: dict[str, list[int]] = {}
+    id_to_key: dict[int, str] = {}
+    for item in items:
+        key = item.get("file_hash") or f"\x00{item['filename']}\x00{item['size']}"
+        groups.setdefault(key, []).append(item["id"])
+        id_to_key[item["id"]] = key
+
+    rep_ids = {min(ids) for ids in groups.values()}
+    key_counts = {k: len(v) for k, v in groups.items()}
+
+    result = []
+    for item in items:
+        if item["id"] in rep_ids:
+            item["copy_count"] = key_counts[id_to_key[item["id"]]]
+            result.append(item)
+    return result

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from utils import compute_sha256, human_size, unique_path
+from utils import compute_sha256, dedupe_by_hash, human_size, unique_path
 
 
 class TestHumanSize:
@@ -92,3 +92,32 @@ class TestUniquePath:
         p.touch()
         result = unique_path(p)
         assert result == tmp_path / "README_1"
+
+
+class TestDedupeByHash:
+    def test_keeps_lowest_id_per_hash(self):
+        items = [
+            {"id": 3, "filename": "a.pdf", "size": 100, "file_hash": "abc"},
+            {"id": 1, "filename": "a_copy.pdf", "size": 100, "file_hash": "abc"},
+            {"id": 2, "filename": "b.pdf", "size": 200, "file_hash": "def"},
+        ]
+        result = dedupe_by_hash(items)
+        result_ids = {r["id"] for r in result}
+        assert result_ids == {1, 2}
+        kept = next(r for r in result if r["id"] == 1)
+        assert kept["copy_count"] == 2
+
+    def test_falls_back_to_filename_and_size_when_no_hash(self):
+        items = [
+            {"id": 5, "filename": "same.pdf", "size": 100, "file_hash": None},
+            {"id": 4, "filename": "same.pdf", "size": 100, "file_hash": None},
+            {"id": 6, "filename": "different.pdf", "size": 100, "file_hash": None},
+        ]
+        result = dedupe_by_hash(items)
+        result_ids = {r["id"] for r in result}
+        assert result_ids == {4, 6}
+
+    def test_single_copy_has_count_one(self):
+        items = [{"id": 1, "filename": "solo.pdf", "size": 50, "file_hash": "xyz"}]
+        result = dedupe_by_hash(items)
+        assert result[0]["copy_count"] == 1

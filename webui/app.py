@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from rich.logging import RichHandler
 
 from db import Database
+from utils import dedupe_by_hash
 
 # Match the main app's logging style (rich, message-focused) so listener and
 # web UI logs read the same when viewed side by side via `docker compose logs`.
@@ -71,7 +72,7 @@ def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: s
     all_items = db.list_downloaded_files(channel=channel, language=language, ids=id_list)
 
     if hide_dupes:
-        all_items = _deduplicate_with_counts(all_items)
+        all_items = dedupe_by_hash(all_items)
     else:
         for item in all_items:
             item["copy_count"] = 1
@@ -79,32 +80,6 @@ def list_files(page: int = 1, per_page: int = 60, channel: str = "", language: s
     offset = (page - 1) * per_page
     total = len(all_items)
     return {"total": total, "page": page, "per_page": per_page, "items": all_items[offset:offset + per_page]}
-
-
-def _deduplicate_with_counts(items: list[dict]) -> list[dict]:
-    """Keep the first-downloaded copy per unique hash (or filename+size fallback).
-
-    Items arrive sorted newest-first; we scan once to find group members, then
-    filter to keep only the representative (lowest id = oldest download) while
-    annotating each with copy_count.
-    """
-    groups: dict[str, list[int]] = {}
-    id_to_key: dict[int, str] = {}
-    for item in items:
-        # Prefer hash when available; fall back to filename|size for unhashed files.
-        key = item.get("file_hash") or f"\x00{item['filename']}\x00{item['size']}"
-        groups.setdefault(key, []).append(item["id"])
-        id_to_key[item["id"]] = key
-
-    rep_ids = {min(ids) for ids in groups.values()}
-    key_counts = {k: len(v) for k, v in groups.items()}
-
-    result = []
-    for item in items:
-        if item["id"] in rep_ids:
-            item["copy_count"] = key_counts[id_to_key[item["id"]]]
-            result.append(item)
-    return result
 
 
 @app.get("/api/channels")
