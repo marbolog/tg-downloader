@@ -62,7 +62,8 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 - **Python 3.11**, managed by **uv** (`pyproject.toml` + `uv.lock`)
 - **Telethon** — MTProto Telegram client (user account, not bot)
 - **cryptg** — C extension giving Telethon AES-NI hardware crypto (avoids pure-Python AES pegging ARM cores on the Pi). No code references it; Telethon auto-detects it at import.
-- **InquirerPy** — interactive checkbox file selection in the terminal
+- **InquirerPy** — interactive checkbox file selection in the terminal (`discard`)
+- **Textual** — terminal UI framework for `tgdctl browse` (list/filter/delete/read downloaded files; PDF/EPUB reading reuses `search/chunker.py`'s existing text extraction, no new C-extension dependencies)
 - **rich** — tables, styled output
 - **PyYAML** — config file
 - **FastAPI + uvicorn** — web UI service (`webui/`)
@@ -80,7 +81,7 @@ uv run tgdctl <command>        # host-side management (Docker + DB stats)
 uv run tg-downloader <command> # app CLI (runs inside the container/venv)
 uv run python main.py <command>
 
-# app subcommands: listen | subscribe | unsubscribe | channels | discard | status | history | scrape
+# app subcommands: listen | subscribe | unsubscribe | channels | discard | browse | status | history | scrape
 ```
 
 ### File layout
@@ -92,6 +93,8 @@ uv run python main.py <command>
 | `listener.py` | Real-time listener; auto-downloads on arrival; startup backfill + flush pending; hourly retention cleanup |
 | `lang_filter.py` | Post-download language detection; auto-discards German files |
 | `ui.py` | Interactive `select_discard` checkbox UI (InquirerPy) |
+| `reader_document.py` | Adapts `search/chunker.py`'s extracted text into a reader-ready `Document` (sections + table of contents) for `reader.py` |
+| `reader.py` | Textual TUI for `tgdctl browse` — list/filter/delete downloaded files, read PDF/EPUB in the terminal |
 | `downloader.py` | `download_item` — single-file daemon-mode download via Telethon |
 | `utils.py` | Shared helpers: `human_size`, `unique_path`, `compute_sha256`, `create_tracked_task` (asyncio fire-and-forget with strong reference + death logging) |
 | `tgdctl.py` | Host-side management CLI; wraps docker compose + proxies app commands |
@@ -124,6 +127,7 @@ uv run tgdctl progress -w            # same, live-updating every 2 seconds (Ctrl
 uv run tgdctl subscribe @channel     # subscribe to a channel
 uv run tgdctl channels               # list subscribed channels
 uv run tgdctl discard                # review downloaded files and delete unwanted ones (no listener restart needed)
+uv run tgdctl browse                 # browse, read (PDF/EPUB), and delete downloaded files in a terminal UI (no listener restart needed)
 uv run tgdctl history [--limit N]    # show recently downloaded files
 uv run tgdctl scrape --dry-run       # AUDIT: report media on Telegram missing from the DB, per channel (writes nothing)
 uv run tgdctl scrape                 # RECOVER: queue every missing file, then download it on the wrapped listener restart
