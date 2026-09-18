@@ -267,6 +267,7 @@ app commands (proxied into the running container):
   unsubscribe @channel    Unsubscribe from a channel
   channels                List subscribed channels
   discard                 Review downloaded files and delete unwanted ones
+  browse                  Browse, read, and delete downloaded files in a terminal UI
   history                 Show recently downloaded files
   scrape [--channel X] [--limit N] [--since DATE] [--dry-run]  Find/recover media missing from the DB (pauses listener briefly; --dry-run audits only)
   scan-languages              Detect language for untagged files; discard German ones
@@ -294,6 +295,7 @@ app commands (proxied into the running container):
     p.add_argument("channel")
     sub.add_parser("channels")
     sub.add_parser("discard")
+    sub.add_parser("browse")
     p = sub.add_parser("history")
     p.add_argument("--limit", type=int, default=20, metavar="N")
 
@@ -335,6 +337,9 @@ app commands (proxied into the running container):
     elif args.command == "discard":
         # No listener restart needed — discard only manages local files and DB.
         sys.exit(app("discard", interactive=True))
+    elif args.command == "browse":
+        # No listener restart needed — browse only manages local files and DB.
+        sys.exit(app("browse", interactive=True))
     elif args.command == "history":
         sys.exit(app("history", "--limit", str(args.limit)))
     elif args.command == "scrape":

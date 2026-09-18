@@ -80,6 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("discard", help="Review downloaded files and delete unwanted ones")
 
+    sub.add_parser("browse", help="Browse, read (PDF/EPUB), and delete downloaded files in a terminal UI")
+
     sub.add_parser("status", help="Show download stats per channel")
 
     p = sub.add_parser("history", help="Show recently downloaded files")
@@ -152,6 +154,10 @@ async def run(args) -> None:
             console.print(f"[green]Deleted {deleted}/{len(to_delete)} file(s).[/green]")
         else:
             console.print("[dim]Nothing deleted.[/dim]")
+        return
+    if args.command == "browse":
+        from reader import BrowseApp
+        await BrowseApp(db).run_async()
         return
 
     tg = config["telegram"]
