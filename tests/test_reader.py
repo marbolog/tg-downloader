@@ -1,3 +1,4 @@
+import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -307,3 +308,80 @@ async def test_search_no_matches_notifies_and_does_not_crash(db, tmp_path):
             await pilot.press("enter")
             reader_screen = app.screen
             assert reader_screen._matches == []
+
+
+async def test_delete_confirmed_removes_file_marks_discarded_and_removes_row(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"content")
+    media_id = _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        table = app.screen.query_one("#library-table")
+        assert table.row_count == 1
+        await pilot.press("d")
+        await pilot.press("enter")  # confirm dialog's default "Delete" button
+        assert table.row_count == 0
+
+    assert not f.exists()
+    row = db.get_media(media_id)
+    assert row["status"] == "discarded"
+    assert row["local_path"] is None
+
+
+async def test_delete_cancelled_keeps_file(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"content")
+    media_id = _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        table = app.screen.query_one("#library-table")
+        await pilot.press("d")
+        await pilot.press("escape")  # cancel
+        assert table.row_count == 1
+
+    assert f.exists()
+    row = db.get_media(media_id)
+    assert row["status"] == "downloaded"
+
+
+async def test_delete_when_already_removed_notifies_and_refreshes(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"content")
+    media_id = _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        # Simulate the web UI discarding it concurrently, between listing and confirming.
+        db.mark_discarded_many([media_id])
+        f.unlink()
+
+        table = app.screen.query_one("#library-table")
+        await pilot.press("d")
+        await pilot.press("enter")
+        assert table.row_count == 0  # still cleared from the visible table
+
+
+async def test_delete_surfaces_locked_database_as_notification_not_crash(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"content")
+    _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+
+    def raise_locked(_ids):
+        raise sqlite3.OperationalError("database is locked")
+
+    async with app.run_test() as pilot:
+        with patch.object(db, "mark_discarded_many", side_effect=raise_locked):
+            table = app.screen.query_one("#library-table")
+            await pilot.press("d")
+            await pilot.press("enter")
+            assert table.row_count == 1  # unchanged -- delete did not go through
+
+    assert f.exists()  # never unlinked -- DB write is attempted before disk unlink

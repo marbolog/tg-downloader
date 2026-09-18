@@ -4,12 +4,13 @@ Textual application with two screens: LibraryScreen (a filterable table of
 downloaded files) and ReaderScreen (opened per file).
 """
 import asyncio
+import sqlite3
 from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Static
+from textual.widgets import Button, DataTable, Footer, Input, Label, ListItem, ListView, Static
 
 from db import Database
 from reader_document import build_document, Document
@@ -43,6 +44,34 @@ class TextPromptScreen(ModalScreen[str]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class ConfirmDeleteScreen(ModalScreen[bool]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, filename: str) -> None:
+        super().__init__()
+        self._filename = filename
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static(f"Delete {self._filename!r}?"),
+            Horizontal(
+                Button("Delete", id="confirm-yes", variant="error"),
+                Button("Cancel", id="confirm-no", variant="primary"),
+            ),
+            id="confirm-dialog",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm-yes")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def on_key(self, event) -> None:
+        if event.key == "enter":
+            self.dismiss(True)
 
 
 class ReaderScreen(Screen):
@@ -125,6 +154,7 @@ class LibraryScreen(Screen):
         ("c", "cycle_channel", "Channel"),
         ("l", "cycle_language", "Language"),
         ("/", "filter_text", "Filter"),
+        ("d", "delete_selected", "Delete"),
     ]
 
     def __init__(self, db: Database) -> None:
@@ -226,6 +256,51 @@ class LibraryScreen(Screen):
             return
 
         self.app.push_screen(ReaderScreen(item["filename"], document))
+
+    def _current_item(self) -> dict | None:
+        if self.table.row_count == 0:
+            return None
+        row_key, _ = self.table.coordinate_to_cell_key(self.table.cursor_coordinate)
+        media_id = int(row_key.value)
+        return self._rows_by_id.get(media_id)
+
+    def action_delete_selected(self) -> None:
+        item = self._current_item()
+        if item is None:
+            return
+
+        def handle_result(confirmed: bool | None) -> None:
+            if confirmed:
+                self._delete_item(item)
+
+        self.app.push_screen(ConfirmDeleteScreen(item["filename"]), handle_result)
+
+    def _delete_item(self, item: dict) -> None:
+        media_id = item["id"]
+        fresh = self.db.get_media(media_id)
+        if fresh is None or fresh["status"] != "downloaded":
+            self.notify("File was already removed.", severity="warning")
+            self._all_rows = [r for r in self._all_rows if r["id"] != media_id]
+            self._rows_by_id.pop(media_id, None)
+            self._apply_filters()
+            return
+
+        local_path = fresh["local_path"]
+        try:
+            self.db.mark_discarded_many([media_id])
+        except sqlite3.OperationalError:
+            self.notify("Database busy -- try again.", severity="error")
+            return
+
+        if local_path:
+            p = Path(local_path)
+            if p.exists():
+                p.unlink()
+
+        self._all_rows = [r for r in self._all_rows if r["id"] != media_id]
+        self._rows_by_id.pop(media_id, None)
+        self._apply_filters()
+        self.notify(f"Deleted {item['filename']!r}.")
 
 
 class BrowseApp(App):
