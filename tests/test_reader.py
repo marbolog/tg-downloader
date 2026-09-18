@@ -55,3 +55,65 @@ async def test_library_screen_dedupes_by_hash(db):
     async with app.run_test() as pilot:
         table = app.screen.query_one("#library-table")
         assert table.row_count == 1
+
+
+async def test_cycle_channel_filters_table(db):
+    ch1 = _channel(db, telegram_id=1, identifier="@ch1", title="Channel One")
+    ch2 = _channel(db, telegram_id=2, identifier="@ch2", title="Channel Two")
+    _downloaded(db, ch1, 1, "a.pdf")
+    _downloaded(db, ch2, 2, "b.pdf")
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        table = app.screen.query_one("#library-table")
+        assert table.row_count == 2
+        await pilot.press("c")  # All -> @ch1 (channels sorted alphabetically)
+        assert table.row_count == 1
+        await pilot.press("c")  # @ch1 -> @ch2
+        assert table.row_count == 1
+        await pilot.press("c")  # @ch2 -> back to All
+        assert table.row_count == 2
+
+
+async def test_cycle_language_filters_table(db):
+    ch = _channel(db)
+    _downloaded(db, ch, 1, "en.pdf", language="en")
+    _downloaded(db, ch, 2, "unknown.pdf", language=None)
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        table = app.screen.query_one("#library-table")
+        assert table.row_count == 2
+        await pilot.press("l")  # All -> __unknown__ (sorts before "en")
+        assert table.row_count == 1
+        await pilot.press("l")  # __unknown__ -> en
+        assert table.row_count == 1
+        await pilot.press("l")  # en -> back to All
+        assert table.row_count == 2
+
+
+async def test_text_filter_matches_filename(db):
+    ch = _channel(db)
+    _downloaded(db, ch, 1, "economist.pdf")
+    _downloaded(db, ch, 2, "novel.epub")
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        table = app.screen.query_one("#library-table")
+        await pilot.press("slash")
+        await pilot.press(*"econ")
+        await pilot.press("enter")
+        assert table.row_count == 1
+
+
+async def test_text_filter_cancel_leaves_table_unchanged(db):
+    ch = _channel(db)
+    _downloaded(db, ch, 1, "a.pdf")
+    _downloaded(db, ch, 2, "b.pdf")
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        table = app.screen.query_one("#library-table")
+        await pilot.press("slash")
+        await pilot.press("escape")
+        assert table.row_count == 2
