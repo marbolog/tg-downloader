@@ -514,14 +514,14 @@ async def test_library_screen_lists_downloaded_files(db):
 
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         assert table.row_count == 2
 
 
 async def test_library_screen_is_empty_when_no_downloads(db):
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         assert table.row_count == 0
 
 
@@ -534,7 +534,7 @@ async def test_library_screen_dedupes_by_hash(db):
 
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         assert table.row_count == 1
 ```
 
@@ -638,7 +638,7 @@ async def test_cycle_channel_filters_table(db):
 
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         assert table.row_count == 2
         await pilot.press("c")  # All -> @ch1 (channels sorted alphabetically)
         assert table.row_count == 1
@@ -655,7 +655,7 @@ async def test_cycle_language_filters_table(db):
 
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         assert table.row_count == 2
         await pilot.press("l")  # All -> __unknown__ (sorts before "en")
         assert table.row_count == 1
@@ -672,7 +672,7 @@ async def test_text_filter_matches_filename(db):
 
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         await pilot.press("slash")
         await pilot.press(*"econ")
         await pilot.press("enter")
@@ -686,7 +686,7 @@ async def test_text_filter_cancel_leaves_table_unchanged(db):
 
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         await pilot.press("slash")
         await pilot.press("escape")
         assert table.row_count == 2
@@ -1029,9 +1029,9 @@ async def test_reader_screen_shows_toc_entries_and_section_text(db, tmp_path):
     with patch("reader.build_document", return_value=_fake_two_section_document()):
         async with app.run_test() as pilot:
             await pilot.press("enter")
-            toc = app.query_one(ListView)
+            toc = app.screen.query_one(ListView)
             assert len(toc.children) == 2
-            first_section = app.query_one("#section-0", Static)
+            first_section = app.screen.query_one("#section-0", Static)
             assert "First page text." in str(first_section.renderable)
 
 
@@ -1045,11 +1045,11 @@ async def test_selecting_toc_entry_scrolls_to_section(db, tmp_path):
     with patch("reader.build_document", return_value=_fake_two_section_document()):
         async with app.run_test() as pilot:
             await pilot.press("enter")
-            toc = app.query_one(ListView)
+            toc = app.screen.query_one(ListView)
             toc.index = 1
             await pilot.press("enter")  # select "Page 2" in the TOC
-            second_section = app.query_one("#section-1", Static)
-            assert second_section.region.y <= app.query_one("#reader-content").scroll_offset.y + app.query_one("#reader-content").size.height
+            second_section = app.screen.query_one("#section-1", Static)
+            assert second_section.region.y <= app.screen.query_one("#reader-content").scroll_offset.y + app.screen.query_one("#reader-content").size.height
 
 
 async def test_escape_returns_to_library_screen(db, tmp_path):
@@ -1373,7 +1373,7 @@ async def test_delete_confirmed_removes_file_marks_discarded_and_removes_row(db,
 
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         assert table.row_count == 1
         await pilot.press("d")
         await pilot.press("enter")  # confirm dialog's default "Delete" button
@@ -1393,7 +1393,7 @@ async def test_delete_cancelled_keeps_file(db, tmp_path):
 
     app = BrowseApp(db)
     async with app.run_test() as pilot:
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         await pilot.press("d")
         await pilot.press("escape")  # cancel
         assert table.row_count == 1
@@ -1415,7 +1415,7 @@ async def test_delete_when_already_removed_notifies_and_refreshes(db, tmp_path):
         db.mark_discarded_many([media_id])
         f.unlink()
 
-        table = app.query_one("#library-table")
+        table = app.screen.query_one("#library-table")
         await pilot.press("d")
         await pilot.press("enter")
         assert table.row_count == 0  # still cleared from the visible table
@@ -1434,7 +1434,7 @@ async def test_delete_surfaces_locked_database_as_notification_not_crash(db, tmp
 
     async with app.run_test() as pilot:
         with patch.object(db, "mark_discarded_many", side_effect=raise_locked):
-            table = app.query_one("#library-table")
+            table = app.screen.query_one("#library-table")
             await pilot.press("d")
             await pilot.press("enter")
             assert table.row_count == 1  # unchanged -- delete did not go through
