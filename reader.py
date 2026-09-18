@@ -7,9 +7,9 @@ import asyncio
 from pathlib import Path
 
 from textual.app import App, ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Input
+from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Static
 
 from db import Database
 from reader_document import build_document, Document
@@ -46,8 +46,10 @@ class TextPromptScreen(ModalScreen[str]):
 
 
 class ReaderScreen(Screen):
-    """Shows one opened document. TOC sidebar and scrolling content pane are
-    added in Task 6; in-document search in Task 7."""
+    BINDINGS = [
+        ("escape", "close", "Back"),
+        ("q", "close", "Back"),
+    ]
 
     def __init__(self, filename: str, document: Document) -> None:
         super().__init__()
@@ -55,7 +57,30 @@ class ReaderScreen(Screen):
         self.document = document
 
     def compose(self) -> ComposeResult:
+        yield Horizontal(
+            ListView(
+                *[ListItem(Label(entry.title)) for entry in self.document.toc],
+                id="toc-sidebar",
+            ),
+            VerticalScroll(
+                *[
+                    Static(section.text, id=f"section-{i}")
+                    for i, section in enumerate(self.document.sections)
+                ],
+                id="reader-content",
+            ),
+        )
         yield Footer()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        index = self.query_one(ListView).index
+        if index is None or index >= len(self.document.toc):
+            return
+        section_index = self.document.toc[index].section_index
+        self.query_one(f"#section-{section_index}", Static).scroll_visible(top=True)
+
+    def action_close(self) -> None:
+        self.app.pop_screen()
 
 
 class LibraryScreen(Screen):
@@ -167,6 +192,23 @@ class LibraryScreen(Screen):
 
 
 class BrowseApp(App):
+    CSS = """
+    #toc-sidebar {
+        width: 30;
+        border-right: solid $accent;
+    }
+    #reader-content {
+        padding: 1 2;
+    }
+    #prompt-dialog {
+        align: center middle;
+        padding: 1 2;
+        border: thick $accent;
+        width: 60;
+        height: 5;
+    }
+    """
+
     def __init__(self, db: Database) -> None:
         super().__init__()
         self.db = db

@@ -1032,7 +1032,7 @@ async def test_reader_screen_shows_toc_entries_and_section_text(db, tmp_path):
             toc = app.screen.query_one(ListView)
             assert len(toc.children) == 2
             first_section = app.screen.query_one("#section-0", Static)
-            assert "First page text." in str(first_section.renderable)
+            assert "First page text." in str(first_section.content)
 
 
 async def test_selecting_toc_entry_scrolls_to_section(db, tmp_path):

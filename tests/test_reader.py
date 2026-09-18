@@ -1,6 +1,8 @@
 from unittest.mock import patch
 
 import pytest
+from textual.widgets import ListView, Static
+
 from db import Database
 from reader import BrowseApp
 from reader_document import Document, Section, TocEntry
@@ -172,4 +174,66 @@ async def test_enter_on_textless_pdf_shows_message_and_stays_on_library(db, tmp_
     with patch("reader.build_document", return_value=None):
         async with app.run_test() as pilot:
             await pilot.press("enter")
+            assert app.screen.__class__.__name__ == "LibraryScreen"
+
+
+def _fake_two_section_document() -> Document:
+    return Document(
+        sections=[
+            Section(title="Page 1", text="First page text."),
+            Section(title="Page 2", text="Second page text."),
+        ],
+        toc=[
+            TocEntry(title="Page 1", section_index=0),
+            TocEntry(title="Page 2", section_index=1),
+        ],
+    )
+
+
+async def test_reader_screen_shows_toc_entries_and_section_text(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-fake")
+    _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    with patch("reader.build_document", return_value=_fake_two_section_document()):
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            toc = app.screen.query_one(ListView)
+            assert len(toc.children) == 2
+            first_section = app.screen.query_one("#section-0", Static)
+            assert "First page text." in str(first_section.content)
+
+
+async def test_selecting_toc_entry_scrolls_to_section(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-fake")
+    _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    with patch("reader.build_document", return_value=_fake_two_section_document()):
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            toc = app.screen.query_one(ListView)
+            toc.index = 1
+            await pilot.press("enter")  # select "Page 2" in the TOC
+            second_section = app.screen.query_one("#section-1", Static)
+            content = app.screen.query_one("#reader-content")
+            assert second_section.region.y <= content.scroll_offset.y + content.size.height
+
+
+async def test_escape_returns_to_library_screen(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-fake")
+    _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    with patch("reader.build_document", return_value=_fake_two_section_document()):
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            assert app.screen.__class__.__name__ == "ReaderScreen"
+            await pilot.press("escape")
             assert app.screen.__class__.__name__ == "LibraryScreen"
