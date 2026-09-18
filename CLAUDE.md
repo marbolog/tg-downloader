@@ -67,9 +67,12 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 - **PyYAML** — config file
 - **FastAPI + uvicorn** — web UI service (`webui/`)
 - **PyMuPDF** — PDF cover thumbnail extraction (webui) + text extraction for language detection (main app)
-- **Pillow** — image resizing for thumbnails
+- **Pillow** — image resizing for thumbnails. Pinned `>=12.3` — this app auto-parses attacker-controlled files (anyone posting to a subscribed channel), and `Image.open()` sniffs format by magic bytes, not file extension, so a `.png`/`.jpg`-renamed file can still reach any registered decoder (e.g. the EPS parser). Pillow 12.0.0–12.2.0 had an EPS-parser infinite-loop DoS (CVE-2026-59203); stay above it on future bumps.
 - **langdetect** — language detection for automatic German-content filtering
 - **httpx** — async HTTP client
+
+### Dependency hygiene
+Since this app auto-downloads and parses untrusted binary files (PDF/EPUB/images from any Telegram channel it's subscribed to) through C-extension libraries (PyMuPDF, Pillow, cryptg), keeping those three current is a security control, not routine maintenance — check `uv pip list --outdated` periodically and prioritize CVE-driven bumps for them over other packages. `pymupdf` 1.28.2+ emits a deprecation warning on `import fitz` (used in `lang_filter.py`, `webui/app.py`, `search/chunker.py`) — harmless today, but migrate to `import pymupdf` before the alias is removed upstream.
 
 ### Entry points
 ```
