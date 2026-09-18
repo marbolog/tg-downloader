@@ -49,12 +49,17 @@ class ReaderScreen(Screen):
     BINDINGS = [
         ("escape", "close", "Back"),
         ("q", "close", "Back"),
+        ("/", "search", "Search"),
+        ("n", "next_match", "Next match"),
+        ("N", "prev_match", "Prev match"),
     ]
 
     def __init__(self, filename: str, document: Document) -> None:
         super().__init__()
         self.filename = filename
         self.document = document
+        self._matches: list[int] = []
+        self._match_pos: int = -1
 
     def compose(self) -> ComposeResult:
         yield Horizontal(
@@ -81,6 +86,38 @@ class ReaderScreen(Screen):
 
     def action_close(self) -> None:
         self.app.pop_screen()
+
+    def action_search(self) -> None:
+        self.app.push_screen(TextPromptScreen("Search in document..."), self._handle_search_query)
+
+    def _handle_search_query(self, query: str | None) -> None:
+        if not query:
+            return
+        needle = query.lower()
+        self._matches = [
+            i for i, s in enumerate(self.document.sections) if needle in s.text.lower()
+        ]
+        self._match_pos = -1
+        if not self._matches:
+            self.notify(f"No matches for {query!r}.", severity="warning")
+            return
+        self.action_next_match()
+
+    def action_next_match(self) -> None:
+        if not self._matches:
+            return
+        self._match_pos = (self._match_pos + 1) % len(self._matches)
+        self._scroll_to_match()
+
+    def action_prev_match(self) -> None:
+        if not self._matches:
+            return
+        self._match_pos = (self._match_pos - 1) % len(self._matches)
+        self._scroll_to_match()
+
+    def _scroll_to_match(self) -> None:
+        section_index = self._matches[self._match_pos]
+        self.query_one(f"#section-{section_index}", Static).scroll_visible(top=True)
 
 
 class LibraryScreen(Screen):

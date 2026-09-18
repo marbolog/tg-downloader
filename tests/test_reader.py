@@ -237,3 +237,73 @@ async def test_escape_returns_to_library_screen(db, tmp_path):
             assert app.screen.__class__.__name__ == "ReaderScreen"
             await pilot.press("escape")
             assert app.screen.__class__.__name__ == "LibraryScreen"
+
+
+def _three_section_document_with_needle() -> Document:
+    return Document(
+        sections=[
+            Section(title="Page 1", text="Nothing interesting here."),
+            Section(title="Page 2", text="The needle is here."),
+            Section(title="Page 3", text="Another needle appears."),
+        ],
+        toc=[
+            TocEntry(title="Page 1", section_index=0),
+            TocEntry(title="Page 2", section_index=1),
+            TocEntry(title="Page 3", section_index=2),
+        ],
+    )
+
+
+async def test_search_jumps_to_first_match(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-fake")
+    _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    with patch("reader.build_document", return_value=_three_section_document_with_needle()):
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.press("slash")
+            await pilot.press(*"needle")
+            await pilot.press("enter")
+            reader_screen = app.screen
+            assert reader_screen._matches == [1, 2]
+            assert reader_screen._match_pos == 0
+
+
+async def test_next_match_cycles_forward(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-fake")
+    _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    with patch("reader.build_document", return_value=_three_section_document_with_needle()):
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.press("slash")
+            await pilot.press(*"needle")
+            await pilot.press("enter")
+            await pilot.press("n")
+            reader_screen = app.screen
+            assert reader_screen._match_pos == 1
+            await pilot.press("n")
+            assert reader_screen._match_pos == 0  # wraps around
+
+
+async def test_search_no_matches_notifies_and_does_not_crash(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-fake")
+    _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    with patch("reader.build_document", return_value=_three_section_document_with_needle()):
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.press("slash")
+            await pilot.press(*"xyzzy")
+            await pilot.press("enter")
+            reader_screen = app.screen
+            assert reader_screen._matches == []
