@@ -1,6 +1,9 @@
+from unittest.mock import patch
+
 import pytest
 from db import Database
 from reader import BrowseApp
+from reader_document import Document, Section, TocEntry
 
 
 @pytest.fixture
@@ -117,3 +120,56 @@ async def test_text_filter_cancel_leaves_table_unchanged(db):
         await pilot.press("slash")
         await pilot.press("escape")
         assert table.row_count == 2
+
+
+async def test_enter_on_pdf_opens_reader_screen(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-fake")
+    _downloaded(db, ch, 1, "book.pdf", ext="pdf", local_path=str(f))
+
+    fake_doc = Document(
+        sections=[Section(title="Page 1", text="hello world")],
+        toc=[TocEntry(title="Page 1", section_index=0)],
+    )
+    app = BrowseApp(db)
+    with patch("reader.build_document", return_value=fake_doc):
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            assert app.screen.__class__.__name__ == "ReaderScreen"
+
+
+async def test_enter_on_unsupported_extension_shows_message_and_stays_on_library(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "comic.cbz"
+    f.write_bytes(b"fake")
+    _downloaded(db, ch, 1, "comic.cbz", ext="cbz", local_path=str(f))
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        assert app.screen.__class__.__name__ == "LibraryScreen"
+
+
+async def test_enter_on_missing_file_shows_message_and_stays_on_library(db, tmp_path):
+    ch = _channel(db)
+    missing_path = str(tmp_path / "gone.pdf")  # never created on disk
+    _downloaded(db, ch, 1, "gone.pdf", ext="pdf", local_path=missing_path)
+
+    app = BrowseApp(db)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        assert app.screen.__class__.__name__ == "LibraryScreen"
+
+
+async def test_enter_on_textless_pdf_shows_message_and_stays_on_library(db, tmp_path):
+    ch = _channel(db)
+    f = tmp_path / "scanned.pdf"
+    f.write_bytes(b"%PDF-fake")
+    _downloaded(db, ch, 1, "scanned.pdf", ext="pdf", local_path=str(f))
+
+    app = BrowseApp(db)
+    with patch("reader.build_document", return_value=None):
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            assert app.screen.__class__.__name__ == "LibraryScreen"

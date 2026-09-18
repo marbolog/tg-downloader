@@ -3,12 +3,16 @@
 Textual application with two screens: LibraryScreen (a filterable table of
 downloaded files) and ReaderScreen (opened per file).
 """
+import asyncio
+from pathlib import Path
+
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input
 
 from db import Database
+from reader_document import build_document, Document
 from utils import dedupe_by_hash, human_size
 
 
@@ -39,6 +43,19 @@ class TextPromptScreen(ModalScreen[str]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class ReaderScreen(Screen):
+    """Shows one opened document. TOC sidebar and scrolling content pane are
+    added in Task 6; in-document search in Task 7."""
+
+    def __init__(self, filename: str, document: Document) -> None:
+        super().__init__()
+        self.filename = filename
+        self.document = document
+
+    def compose(self) -> ComposeResult:
+        yield Footer()
 
 
 class LibraryScreen(Screen):
@@ -121,6 +138,32 @@ class LibraryScreen(Screen):
             return
         self._text_filter = value
         self._apply_filters()
+
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        media_id = int(event.row_key.value)
+        item = self._rows_by_id.get(media_id)
+        if item is None:
+            return
+
+        ext = (item.get("ext") or "").lower()
+        if ext not in ("pdf", "epub"):
+            self.notify(
+                f"{ext or 'this format'} isn't readable in the terminal -- use the web UI to download it.",
+                severity="warning",
+            )
+            return
+
+        local_path = item.get("local_path")
+        if not local_path or not Path(local_path).exists():
+            self.notify("File is missing from disk.", severity="error")
+            return
+
+        document = await asyncio.to_thread(build_document, Path(local_path), ext)
+        if document is None:
+            self.notify("No extractable text -- this looks like a scanned/image file.", severity="warning")
+            return
+
+        self.app.push_screen(ReaderScreen(item["filename"], document))
 
 
 class BrowseApp(App):
