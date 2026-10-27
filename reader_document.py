@@ -14,7 +14,7 @@ callers never need two code paths for "has bookmarks" vs. "doesn't."
 from dataclasses import dataclass
 from pathlib import Path
 
-import fitz
+import pymupdf
 
 from search.chunker import chunk_file
 
@@ -73,7 +73,7 @@ def _pdf_toc(path: Path, chunks: list[dict]) -> list[TocEntry]:
     bookmark can point at a page whose text extraction was skipped, e.g. a
     blank divider). Bookmarks past the last chunked page are dropped."""
     try:
-        doc = fitz.open(str(path))
+        doc = pymupdf.open(str(path))
         outline = doc.get_toc()
         doc.close()
     except Exception:

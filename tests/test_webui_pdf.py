@@ -28,8 +28,8 @@ def _client(tmp_path, monkeypatch):
 
 
 def _make_pdf(path: Path) -> None:
-    import fitz
-    doc = fitz.open()
+    import pymupdf
+    doc = pymupdf.open()
     doc.new_page()
     doc.save(str(path))
     doc.close()

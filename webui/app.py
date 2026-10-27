@@ -111,12 +111,12 @@ def _generate_thumb(file_path: Path, ext: str) -> bytes | None:
         return None
     try:
         if ext == "pdf":
-            import fitz
-            fitz.TOOLS.mupdf_display_errors(False)  # suppress C-layer stderr noise
-            doc = fitz.open(str(file_path))
+            import pymupdf
+            pymupdf.TOOLS.mupdf_display_errors(False)  # suppress C-layer stderr noise
+            doc = pymupdf.open(str(file_path))
             if not doc.page_count:
                 return None
-            pix = doc[0].get_pixmap(matrix=fitz.Matrix(0.6, 0.6))
+            pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(0.6, 0.6))
             return pix.tobytes("jpeg")
 
         if ext == "epub":

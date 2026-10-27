@@ -41,13 +41,13 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 
-import fitz
+import pymupdf
 from langdetect import DetectorFactory, detect_langs
 from langdetect.lang_detect_exception import LangDetectException
 
 # Silence MuPDF's C-layer stderr spew on malformed PDFs (it bypasses Python
 # try/except). Failures are already handled where text is extracted.
-fitz.TOOLS.mupdf_display_errors(False)
+pymupdf.TOOLS.mupdf_display_errors(False)
 
 DetectorFactory.seed = 0  # make detection deterministic
 
@@ -456,7 +456,7 @@ def _looks_like_newspaper(
 
 
 def _pdf_text(file_path: Path, pages: int, *, include_metadata: bool = False) -> str:
-    doc = fitz.open(str(file_path))
+    doc = pymupdf.open(str(file_path))
     parts = []
     if include_metadata:
         meta = doc.metadata or {}
@@ -479,7 +479,7 @@ def _pdf_text_parts(file_path: Path) -> tuple[str, str, str, list[str]]:
     pages is the per-page text list (same sample as topic_body) -- used by the
     newspaper dateline-repetition check, which needs page-level granularity.
     """
-    doc = fitz.open(str(file_path))
+    doc = pymupdf.open(str(file_path))
     meta = doc.metadata or {}
     metadata = " ".join(filter(None, [
         meta.get("title", ""),

@@ -12,12 +12,12 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-import fitz
+import pymupdf
 
 # Silence MuPDF's C-layer stderr spew (e.g. "format error: non-page object in
 # page tree") on malformed PDFs — these bypass Python try/except. We already
 # handle the failures per page; the raw library noise is not actionable.
-fitz.TOOLS.mupdf_display_errors(False)
+pymupdf.TOOLS.mupdf_display_errors(False)
 
 SUPPORTED_EXTS = {"pdf", "epub"}
 _HEADING_RE = re.compile(r"<h[1-3][^>]*>(.*?)</h[1-3]>", re.IGNORECASE | re.DOTALL)
@@ -34,7 +34,7 @@ def chunk_file(path: Path, ext: str) -> list[dict]:
 
 def _chunk_pdf(path: Path) -> list[dict]:
     try:
-        doc = fitz.open(str(path))
+        doc = pymupdf.open(str(path))
     except Exception:
         return []
     try:

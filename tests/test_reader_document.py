@@ -18,7 +18,7 @@ def test_pdf_without_outline_falls_back_to_page_titles():
     mock_doc = MagicMock()
     mock_doc.get_toc.return_value = []
     with patch("reader_document.chunk_file", return_value=_mock_pdf_chunks()), \
-         patch("reader_document.fitz.open", return_value=mock_doc):
+         patch("reader_document.pymupdf.open", return_value=mock_doc):
         doc = build_document(Path("book.pdf"), "pdf")
 
     assert doc is not None
@@ -37,7 +37,7 @@ def test_pdf_with_outline_maps_bookmarks_to_sections():
         [1, "Chapter One", 2],
     ]
     with patch("reader_document.chunk_file", return_value=_mock_pdf_chunks()), \
-         patch("reader_document.fitz.open", return_value=mock_doc):
+         patch("reader_document.pymupdf.open", return_value=mock_doc):
         doc = build_document(Path("book.pdf"), "pdf")
 
     assert doc is not None
@@ -58,7 +58,7 @@ def test_pdf_bookmark_targeting_skipped_page_uses_nearest_later_page():
     mock_doc = MagicMock()
     mock_doc.get_toc.return_value = [[1, "Chapter One", 2]]
     with patch("reader_document.chunk_file", return_value=chunks), \
-         patch("reader_document.fitz.open", return_value=mock_doc):
+         patch("reader_document.pymupdf.open", return_value=mock_doc):
         doc = build_document(Path("book.pdf"), "pdf")
 
     assert doc is not None
@@ -72,7 +72,7 @@ def test_pdf_bookmark_targeting_page_past_the_end_falls_back_to_default_toc():
     mock_doc = MagicMock()
     mock_doc.get_toc.return_value = [[1, "Appendix", 99]]
     with patch("reader_document.chunk_file", return_value=_mock_pdf_chunks()), \
-         patch("reader_document.fitz.open", return_value=mock_doc):
+         patch("reader_document.pymupdf.open", return_value=mock_doc):
         doc = build_document(Path("book.pdf"), "pdf")
 
     assert doc is not None

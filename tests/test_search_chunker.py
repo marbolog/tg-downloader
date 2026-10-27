@@ -28,7 +28,7 @@ def test_pdf_chunks_have_required_keys():
     mock_doc.__iter__ = MagicMock(return_value=iter([mock_page0, mock_page1]))
     mock_doc.__getitem__ = MagicMock(side_effect=[mock_page0, mock_page1])
 
-    with patch("search.chunker.fitz.open", return_value=mock_doc):
+    with patch("search.chunker.pymupdf.open", return_value=mock_doc):
         chunks = chunk_file(Path("book.pdf"), "pdf")
 
     assert len(chunks) == 2
@@ -50,7 +50,7 @@ def test_pdf_skips_empty_pages():
     mock_page1.get_text.return_value = "Real content."
     mock_doc.__getitem__ = MagicMock(side_effect=[mock_page0, mock_page1])
 
-    with patch("search.chunker.fitz.open", return_value=mock_doc):
+    with patch("search.chunker.pymupdf.open", return_value=mock_doc):
         chunks = chunk_file(Path("book.pdf"), "pdf")
 
     assert len(chunks) == 1
