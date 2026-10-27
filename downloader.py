@@ -68,7 +68,7 @@ async def download_item(
             await asyncio.wait_for(_fetch_and_download(), timeout=timeout_seconds)
 
             if message is None:
-                db.mark_discarded(item["id"])
+                db.mark_discarded(item["id"], reason="message_deleted")
                 log.warning(
                     f"[{label}] Message {item['message_id']} not found on Telegram "
                     f"(deleted?) -- {item['filename']!r} marked discarded"
@@ -81,19 +81,19 @@ async def download_item(
 
             if lang == DISCARD_LANG:
                 filepath.unlink(missing_ok=True)
-                db.mark_discarded(item["id"])
+                db.mark_discarded(item["id"], reason="german")
                 log.info(f"[{label}] Auto-discarded (German): {item['filename']}")
                 return True
 
             if topic:
                 filepath.unlink(missing_ok=True)
-                db.mark_discarded(item["id"])
+                db.mark_discarded(item["id"], reason=f"topic:{topic}")
                 log.info(f"[{label}] Auto-discarded (topic: {topic}): {item['filename']}")
                 return True
 
             if is_newspaper:
                 filepath.unlink(missing_ok=True)
-                db.mark_discarded(item["id"])
+                db.mark_discarded(item["id"], reason="newspaper")
                 log.info(f"[{label}] Auto-discarded (newspaper): {item['filename']}")
                 return True
 

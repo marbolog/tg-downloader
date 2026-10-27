@@ -51,6 +51,7 @@ _MIGRATIONS = [
     "ALTER TABLE media_messages ADD COLUMN language TEXT",
     "ALTER TABLE media_messages ADD COLUMN file_hash TEXT",
     "ALTER TABLE media_messages ADD COLUMN indexed_at TEXT",
+    "ALTER TABLE media_messages ADD COLUMN discard_reason TEXT",
 ]
 
 
@@ -217,10 +218,10 @@ class Database:
                 "UPDATE media_messages SET status='skipped' WHERE id=?", (media_id,)
             )
 
-    def mark_discarded(self, media_id: int) -> None:
-        self.mark_discarded_many([media_id])
+    def mark_discarded(self, media_id: int, reason: str | None = None) -> None:
+        self.mark_discarded_many([media_id], reason=reason)
 
-    def mark_discarded_many(self, media_ids: list[int]) -> None:
+    def mark_discarded_many(self, media_ids: list[int], reason: str | None = None) -> None:
         """Batch version of mark_discarded -- one connection/transaction for the
         whole list, not one per id.
 
@@ -229,19 +230,34 @@ class Database:
         used to be its own lock-acquisition attempt, so a large batch was
         effectively daring `busy_timeout` to fail once out of N tries. A single
         transaction takes that risk once and is atomic -- no id is left
-        half-updated if it does hit "database is locked"."""
+        half-updated if it does hit "database is locked".
+
+        `reason` records why the row was discarded (german, topic:<name>, newspaper,
+        message_deleted, manual:<cli|webui|tui>). Rows discarded before this column
+        existed have NULL."""
         if not media_ids:
             return
         placeholders = ",".join("?" * len(media_ids))
         with self._conn() as conn:
             conn.execute(
-                f"UPDATE media_messages SET status='discarded', local_path=NULL WHERE id IN ({placeholders})",
-                media_ids,
+                f"UPDATE media_messages SET status='discarded', local_path=NULL, discard_reason=? "
+                f"WHERE id IN ({placeholders})",
+                [reason, *media_ids],
             )
             conn.execute(
                 f"DELETE FROM search_fts WHERE media_id IN ({placeholders})",
                 [str(i) for i in media_ids],
             )
+
+    def discard_reason_counts(self) -> dict[str, int]:
+        """Discarded rows grouped by reason; pre-migration rows appear as 'unknown'."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT COALESCE(discard_reason, 'unknown') AS reason, COUNT(*) AS n
+                   FROM media_messages WHERE status='discarded'
+                   GROUP BY reason ORDER BY n DESC"""
+            ).fetchall()
+        return {r["reason"]: r["n"] for r in rows}
 
     def mark_expired(self, media_id: int) -> None:
         with self._conn() as conn:

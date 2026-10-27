@@ -455,7 +455,7 @@ async def test_delete_surfaces_locked_database_as_notification_not_crash(db, tmp
 
     app = BrowseApp(db)
 
-    def raise_locked(_ids):
+    def raise_locked(_ids, reason=None):
         raise sqlite3.OperationalError("database is locked")
 
     async with app.run_test() as pilot:

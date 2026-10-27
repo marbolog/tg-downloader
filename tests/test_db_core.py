@@ -435,3 +435,32 @@ class TestGetDownloadHistory:
         ch = _add_channel(db)
         db.save_media_message(channel_id=ch, message_id=1, filename="p.pdf", size=1, mime_type="application/pdf", ext="pdf", date="2026-01-01T00:00:00", caption="")
         assert db.get_download_history() == []
+
+
+# ── Discard reasons ───────────────────────────────────────────────────────────
+
+class TestDiscardReason:
+    def _reason(self, db, media_id):
+        with db._conn() as conn:
+            return conn.execute(
+                "SELECT discard_reason FROM media_messages WHERE id=?", (media_id,)
+            ).fetchone()["discard_reason"]
+
+    def test_mark_discarded_stores_reason(self, db):
+        mid = _insert_downloaded(db, _add_channel(db))
+        db.mark_discarded(mid, reason="german")
+        assert self._reason(db, mid) == "german"
+
+    def test_mark_discarded_many_stores_reason_for_all(self, db):
+        ch = _add_channel(db)
+        ids = [_insert_downloaded(db, ch, msg_id=i) for i in range(1, 4)]
+        db.mark_discarded_many(ids, reason="manual:webui")
+        assert [self._reason(db, i) for i in ids] == ["manual:webui"] * 3
+
+    def test_discard_reason_counts_groups_only_discarded_rows(self, db):
+        ch = _add_channel(db)
+        a, b, c, kept = (_insert_downloaded(db, ch, msg_id=i) for i in range(1, 5))
+        db.mark_discarded(a, reason="german")
+        db.mark_discarded(b, reason="german")
+        db.mark_discarded(c, reason="newspaper")
+        assert db.discard_reason_counts() == {"german": 2, "newspaper": 1}

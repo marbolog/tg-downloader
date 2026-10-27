@@ -161,7 +161,7 @@ def discard_files(req: DiscardRequest):
     try:
         # One transaction for the whole batch -- see mark_discarded_many's
         # docstring for why per-id transactions caused intermittent 500s here.
-        db.mark_discarded_many(req.ids)
+        db.mark_discarded_many(req.ids, reason="manual:webui")
     except sqlite3.OperationalError as exc:
         log.error(f"Discard failed for {len(req.ids)} files: {exc}")
         raise HTTPException(status_code=503, detail="Database busy, please try again") from exc

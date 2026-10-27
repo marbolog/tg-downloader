@@ -117,7 +117,7 @@ def test_discard_returns_503_on_database_locked(tmp_path, monkeypatch):
     f1.write_text("a")
     id1 = _insert(webui_app.db, filename="a.pdf", local_path=str(f1))
 
-    def raise_locked(_ids):
+    def raise_locked(_ids, reason=None):
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(webui_app.db, "mark_discarded_many", raise_locked)
@@ -128,3 +128,18 @@ def test_discard_returns_503_on_database_locked(tmp_path, monkeypatch):
     with webui_app.db._conn() as conn:
         row = conn.execute("SELECT status FROM media_messages WHERE id=?", (id1,)).fetchone()
     assert row["status"] == "downloaded"
+
+
+def test_discard_records_manual_webui_reason(tmp_path, monkeypatch):
+    webui_app, client = _client(tmp_path, monkeypatch)
+    f = tmp_path / "a.pdf"
+    f.write_text("a")
+    media_id = _insert(webui_app.db, filename="a.pdf", local_path=str(f))
+
+    client.post("/api/discard", json={"ids": [media_id]})
+
+    with webui_app.db._conn() as conn:
+        reason = conn.execute(
+            "SELECT discard_reason FROM media_messages WHERE id=?", (media_id,)
+        ).fetchone()["discard_reason"]
+    assert reason == "manual:webui"

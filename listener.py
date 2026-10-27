@@ -302,6 +302,7 @@ async def _heartbeat_loop(db: Database) -> None:
                 f"discarded={s['discarded']} expired={s['expired']} "
                 f"channels_no_messages={s['channels_no_messages']}"
             )
+            log.info(f"Discards by reason: {db.discard_reason_counts()}")
             _touch_heartbeat()
         except Exception as exc:
             log.error(f"Heartbeat error: {exc}", exc_info=True)

@@ -150,7 +150,7 @@ async def run(args) -> None:
                     if p.exists():
                         p.unlink()
                         deleted += 1
-                db.mark_discarded(item["id"])
+                db.mark_discarded(item["id"], reason="manual:cli")
             console.print(f"[green]Deleted {deleted}/{len(to_delete)} file(s).[/green]")
         else:
             console.print("[dim]Nothing deleted.[/dim]")
@@ -345,7 +345,7 @@ def cmd_scan_languages(db: Database) -> None:
         lang = detect_language(path, (item.get("ext") or "").lower())
         if lang == DISCARD_LANG:
             path.unlink(missing_ok=True)
-            db.mark_discarded(item["id"])
+            db.mark_discarded(item["id"], reason="german")
             discarded += 1
             counts["de"] = counts.get("de", 0) + 1
             log.info(f"Scan-discarded (German): {item['filename']}")
@@ -403,7 +403,7 @@ def cmd_scan_topics(db: Database, config: dict) -> None:
         )
         if topic:
             path.unlink(missing_ok=True)
-            db.mark_discarded(item["id"])
+            db.mark_discarded(item["id"], reason=f"topic:{topic}")
             discarded += 1
             counts[topic] = counts.get(topic, 0) + 1
             log.info(f"Scan-discarded (topic: {topic}): {item['filename']}")
@@ -449,7 +449,7 @@ def cmd_scan_newspapers(db: Database, config: dict) -> None:
         ext = (item.get("ext") or "").lower()
         if detect_newspaper(path, ext, filters.newspaper_names):
             path.unlink(missing_ok=True)
-            db.mark_discarded(item["id"])
+            db.mark_discarded(item["id"], reason="newspaper")
             discarded += 1
             log.info(f"Scan-discarded (newspaper): {item['filename']}")
 

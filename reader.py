@@ -421,7 +421,7 @@ class LibraryScreen(Screen):
 
         if valid_ids:
             try:
-                self.db.mark_discarded_many(valid_ids)
+                self.db.mark_discarded_many(valid_ids, reason="manual:tui")
             except sqlite3.OperationalError:
                 self.notify("Database busy -- try again.", severity="error")
                 self._drop_rows(removed_ids)
