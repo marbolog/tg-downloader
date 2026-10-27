@@ -271,6 +271,11 @@ The detected language is stored in `media_messages.language` (ISO 639-1 code, nu
 | `expired` | Auto-deleted by retention cleanup |
 | `skipped` | Legacy — dismissed without downloading in the old manual workflow |
 
+### Audit 2026-10-27 ("is content missing?")
+`scrape --dry-run` over 8 of 9 channels found only 2 unrecorded files (`FT UK.pdf`, `FT EU.pdf` in `@trunkietrunk`); `@enmagazine` was not completed but its message ids are contiguous. So lost-in-transit files are rare. The real reasons content looks "missing": ~85k legacy `skipped` rows (pre-2026-01, never downloaded; `scrape` ignores any id already in the DB, so they are not recoverable without resetting those rows), ~6.9k `discarded` rows (German/newspaper filters and manual deletes — there is no `discard_reason` column, so the cause is unrecoverable after the fact), and extensions outside `filters.extensions` being dropped at DEBUG level only. `@itsallinenglish` simply stopped posting (252 files in 2023 → 2 in 2026). Open improvement: add `discard_reason` and log extension-filtered counts at INFO.
+
+**Operational gotcha**: never wrap `tgdctl scrape` in `timeout`. The wrapper stops the listener, runs the audit in a `--rm` container, then restarts the listener; killing the wrapper leaves the listener stopped and the audit's output is lost when the container exits. Run it in the background without a timeout.
+
 ### Known constraints
 - Can only watch channels the authenticated user is a member of. The `subscribe` command adds the channel to the DB but does not join it; use the Telegram app to join first.
 - Backfill only covers the gap since the last recorded message — it does not fetch all history. Use `scrape` for a full initial history pull. At startup, `listen` logs a `WARNING` for every channel with no recorded messages, naming the exact `scrape` command to run.
