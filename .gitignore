@@ -17,3 +17,6 @@ __pycache__/
 # build artifacts
 *.egg-info/
 .env
+
+# Browser-automation tool output
+.playwright-mcp/
