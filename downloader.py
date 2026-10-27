@@ -10,6 +10,16 @@ from utils import compute_sha256, create_tracked_task, human_size, unique_path
 
 log = logging.getLogger(__name__)
 
+# Slowest sustained throughput we still expect to complete a download. A flat
+# timeout fails every large file on a slow link no matter how many times it is
+# retried (a 114 MB file needs >=190 KB/s to fit in 600 s).
+MIN_EXPECTED_BYTES_PER_SECOND = 100_000
+
+
+def download_timeout(size_bytes: int, base_seconds: int) -> int:
+    """Per-item timeout: the configured base, extended for large files."""
+    return max(base_seconds, size_bytes // MIN_EXPECTED_BYTES_PER_SECOND)
+
 
 async def download_item(
     client: TelegramClient,
@@ -54,6 +64,7 @@ async def download_item(
                 await client.download_media(message, file=str(filepath))
 
         try:
+            timeout_seconds = download_timeout(item.get("size") or 0, timeout_seconds)
             await asyncio.wait_for(_fetch_and_download(), timeout=timeout_seconds)
 
             if message is None:

@@ -162,6 +162,29 @@ async def _flush_pending(client, db, dest, semaphore, filters: FilterSettings, t
     log.info(f"Flush complete: {ok}/{len(pending)} succeeded")
 
 
+async def _retry_stale_pending(
+    client, db, dest, semaphore, filters: FilterSettings, timeout_seconds: int,
+    previously_pending: set[int],
+) -> set[int]:
+    """Retry items that have been `pending` across two consecutive checks.
+
+    A failed or timed-out download stays `pending`, and neither the hourly backfill
+    nor the daily reconcile revisits it (save_media_message dedups the id), so
+    without this it waits for the next restart -- observed: 14 files stuck for
+    3 days. An item pending at only one check may be a download still in flight,
+    so it is only retried once it has survived a whole check interval.
+
+    Returns the ids still pending afterwards, to pass as `previously_pending` next time."""
+    stale = [item for item in db.get_pending_media() if item["id"] in previously_pending]
+    if stale:
+        log.info(f"Retrying {len(stale)} download(s) stuck in pending...")
+        await _gather_with_heartbeat(
+            download_item(client, db, item, dest, semaphore, filters, timeout_seconds=timeout_seconds)
+            for item in stale
+        )
+    return {item["id"] for item in db.get_pending_media()}
+
+
 async def _heal_missing(client, db, dest, semaphore, filters: FilterSettings, timeout_seconds: int) -> None:
     """Re-download files marked 'downloaded' in the DB but absent from disk."""
     downloaded = db.get_downloaded_media()
@@ -193,12 +216,18 @@ async def _backfill_missed(
     for ch in db.list_channels():
         max_id = db.get_max_message_id(ch["id"])
         if max_id is None:
+            # No watermark to anchor on. Skipping here would leave a channel whose
+            # first messages real-time delivery dropped empty forever, so scan the
+            # recent window instead; `scrape` remains the way to pull full history.
             if warn_empty:
                 log.warning(
                     f"Backfill: no prior messages recorded for {ch['title']!r} -- "
-                    f"run 'scrape --channel {ch['identifier']}' to pull existing history"
+                    f"scanning its last {RECONCILE_WINDOW} messages; run "
+                    f"'scrape --channel {ch['identifier']}' to pull existing history"
                 )
-            continue
+            min_id, limit = 0, RECONCILE_WINDOW
+        else:
+            min_id, limit = max_id, None
 
         try:
             entity = await client.get_entity(ch["identifier"])
@@ -207,7 +236,7 @@ async def _backfill_missed(
             continue
 
         tasks = []
-        async for message in client.iter_messages(entity, min_id=max_id):
+        async for message in client.iter_messages(entity, min_id=min_id, limit=limit):
             if not message.media:
                 continue
             coro = _record_and_download(
@@ -290,11 +319,15 @@ async def _backfill_loop(
     real-time delivery stopped. Harmless when real-time is healthy: `min_id` is
     already current, so nothing new is fetched and no message is double-downloaded
     (save_media_message dedups on message_id)."""
+    previously_pending: set[int] = set()
     while True:
         await asyncio.sleep(3600)
         try:
             await _backfill_missed(
                 client, db, allowed, dest, semaphore, filters, timeout_seconds, warn_empty=False
+            )
+            previously_pending = await _retry_stale_pending(
+                client, db, dest, semaphore, filters, timeout_seconds, previously_pending
             )
         except Exception as exc:
             log.error(f"Periodic backfill error: {exc}", exc_info=True)
