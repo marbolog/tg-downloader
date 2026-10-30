@@ -233,7 +233,7 @@ class Database:
         half-updated if it does hit "database is locked".
 
         `reason` records why the row was discarded (german, topic:<name>, newspaper,
-        message_deleted, manual:<cli|webui|tui>). Rows discarded before this column
+        message_deleted, manual:<cli|webui|fs>). Rows discarded before this column
         existed have NULL."""
         if not media_ids:
             return

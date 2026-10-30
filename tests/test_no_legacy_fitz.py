@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_importing_pdf_modules_does_not_use_legacy_fitz_alias():
     result = subprocess.run(
         [sys.executable, "-W", "error::FutureWarning", "-c",
-         "import lang_filter, reader_document, search.chunker; import sys; "
+         "import lang_filter, search.chunker; import sys; "
          "assert 'fitz' not in sys.modules or 'pymupdf' in sys.modules"],
         cwd=ROOT, capture_output=True, text=True,
     )
