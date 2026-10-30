@@ -1,0 +1,18 @@
+# yazi settings for `tgdctl browse`. Keys live in keymap.toml.
+[mgr]
+sort_by      = "alphabetical"
+sort_dir_first = true
+show_hidden  = false
+show_symlink = false   # hide "-> /long/target" next to every view link
+linemode     = "size"
+
+# Previews are on demand: init.lua starts with the preview pane collapsed (yazi renders
+# nothing for a zero-width pane, so browsing stays fast on a Pi) and `T` toggles it.
+# Built-in previewers apply when shown: PDF via pdftoppm (poppler-utils), images via
+# the terminal's image protocol. EPUB is handled by plugins/epub-cover.yazi (cover image
+# pulled from the OPF manifest). A `*` rule here would shadow the built-ins, so only
+# *.epub is claimed.
+[plugin]
+prepend_previewers = [
+  { url = "*.epub", run = "epub-cover" },
+]

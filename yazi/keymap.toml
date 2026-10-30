@@ -1,0 +1,48 @@
+# yazi config used only by `tgdctl browse` (via YAZI_CONFIG_HOME).
+#
+# Goal: deleting is always safe. A plain delete would only remove a symlink from the
+# views, or -- on a real file -- make the listener re-download it (the database would
+# still say "downloaded"). So every key that removes or moves files is either routed
+# through `tgdctl discard-path` (file + DB record) or disabled.
+
+[[mgr.prepend_keymap]]
+on   = "d"
+run  = 'shell --block -- "$TGD_DISCARD" %s'
+desc = "Delete selected (or hovered) files: file + database record"
+
+[[mgr.prepend_keymap]]
+on   = "D"
+run  = 'shell --block -- "$TGD_DISCARD" %s'
+desc = "Delete selected (or hovered) files: file + database record"
+
+[[mgr.prepend_keymap]]
+on   = "<Delete>"
+run  = 'shell --block -- "$TGD_DISCARD" %s'
+desc = "Delete selected (or hovered) files: file + database record"
+
+# Keys that would move, rename or create real files behind the database's back.
+[[mgr.prepend_keymap]]
+on  = "x"
+run = "noop"
+
+[[mgr.prepend_keymap]]
+on  = "p"
+run = "noop"
+
+[[mgr.prepend_keymap]]
+on  = "P"
+run = "noop"
+
+[[mgr.prepend_keymap]]
+on  = "r"
+run = "noop"
+
+[[mgr.prepend_keymap]]
+on  = "a"
+run = "noop"
+
+# Preview pane is hidden at startup (init.lua); T toggles it.
+[[mgr.prepend_keymap]]
+on   = "T"
+run  = "plugin toggle-pane min-preview"
+desc = "Show or hide the preview pane"

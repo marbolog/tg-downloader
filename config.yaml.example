@@ -10,6 +10,7 @@ telegram:
 
 download:
   destination: "data/downloads"   # where downloaded files are saved
+  views_directory: "data/views"  # generated symlink folders (by channel/language/type/month) for `tgdctl browse`; safe to delete
   retention_days: 365             # delete files from disk after this many days (0 = never)
   concurrent_downloads: 1         # parallel downloads; keep at 1 on Raspberry Pi (MTProto AES pegs ARM cores)
   timeout_seconds: 600            # per-file network timeout (entity/message lookup + download); bounds a stalled connection

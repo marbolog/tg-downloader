@@ -1,0 +1,12 @@
+# No Nerd Font required: icons and powerline separators are turned off so the UI
+# renders the same in any terminal.
+[icon]
+globs = []
+dirs  = []
+files = []
+exts  = []
+conds = []
+
+[status]
+sep_left  = { open = "", close = "" }
+sep_right = { open = "", close = "" }

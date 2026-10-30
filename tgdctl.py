@@ -12,10 +12,17 @@ Usage:
 """
 
 import argparse
+import os
+import shutil
 import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+
+from config import load_config
+from db import Database
+from utils import human_size
+from views import build_views, discard_paths
 
 PROJECT_DIR = Path(__file__).parent
 DB_PATH = PROJECT_DIR / "data" / "tg_downloader.db"
@@ -81,6 +88,92 @@ def run_with_restart(*app_args: str, interactive: bool = False) -> int:
     finally:
         print("Restarting listener...")
         compose("up", "-d", SERVICE)
+
+
+def _views_settings() -> tuple[Path, Path]:
+    """(downloads_dir, views_dir) from config.yaml; relative paths resolve against the project."""
+    dl = load_config(str(PROJECT_DIR / "config.yaml"))["download"]
+    return PROJECT_DIR / dl["destination"], PROJECT_DIR / dl["views_directory"]
+
+
+def cmd_views() -> int:
+    """Rebuild the category symlink folders from the DB."""
+    downloads_dir, views_dir = _views_settings()
+    counts = build_views(Database(str(DB_PATH)), views_dir, downloads_dir)
+    for category, n in counts.items():
+        print(f"  {category:<12} {n} links")
+    print(f"Views ready in {views_dir}")
+    return 0
+
+
+def cmd_browse() -> int:
+    """Rebuild the views, then open yazi on them with this project's isolated config."""
+    if not shutil.which("yazi"):
+        print("yazi is not installed. Debian/Raspberry Pi OS: sudo apt install yazi", file=sys.stderr)
+        return 1
+    _, views_dir = _views_settings()
+    cmd_views()
+    env = {
+        **os.environ,
+        # Own config dir: safe-delete keybindings apply only to this launcher, not to
+        # the user's everyday yazi.
+        "YAZI_CONFIG_HOME": str(PROJECT_DIR / "yazi"),
+        "TGD_DISCARD": str(PROJECT_DIR / "yazi" / "discard.sh"),
+        "TGD_PYTHON": sys.executable,
+    }
+    return subprocess.call(["yazi", str(views_dir)], env=env)
+
+
+def _read_key(prompt: str) -> str:
+    """One keypress without Enter on a terminal (it runs inside yazi's --block shell);
+    a plain input() line when stdin is not a terminal (tests, pipes)."""
+    print(prompt, end="", flush=True)
+    if not sys.stdin.isatty():
+        return input()
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        key = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+    print(key)
+    return key
+
+
+def cmd_discard_path(paths: list[str], assume_yes: bool) -> int:
+    """Delete the real files behind the given paths and record it in the DB.
+
+    Called by yazi's delete keys (see yazi/keymap.toml). Runs on the host and writes the
+    DB directly, like `status`; discard_paths records the discard before unlinking."""
+    downloads_dir, views_dir = _views_settings()
+    names = [Path(p).name for p in paths]
+    if sys.stdout.isatty():
+        print("\033[2J\033[H", end="")  # yazi's --block hands us the main screen with the launcher's output still on it
+    print(f"Delete {len(paths)} item(s) permanently (file + database record)?")
+    for name in names[:10]:
+        print(f"  {name}")
+    if len(names) > 10:
+        print(f"  ... and {len(names) - 10} more")
+    if not assume_yes and _read_key("[y/N] ").strip().lower() != "y":
+        return 0
+
+    try:
+        report = discard_paths(Database(str(DB_PATH)), [Path(p) for p in paths], downloads_dir, views_dir)
+    except Exception as exc:  # DB locked etc. -- discard_paths guarantees nothing was deleted
+        print(f"Nothing deleted: {exc}", file=sys.stderr)
+        _read_key("Press any key to return ")
+        return 1
+
+    print(f"Deleted {len(report.discarded) + len(report.untracked)} file(s)"
+          f" ({len(report.untracked)} had no database record).")
+    for path, why in {**report.skipped, **report.failed}.items():
+        print(f"  skipped {path.name}: {why}")
+    if not assume_yes:
+        _read_key("Press any key to return ")
+    return 1 if report.failed else 0
 
 
 def cmd_status() -> None:
@@ -262,12 +355,16 @@ service commands:
   status     Container state + per-channel DB stats
   progress   Live download progress + recent files  (-w to watch)
 
+file browsing (runs on the host, no container needed):
+  browse                  Open yazi on category folders (by channel/language/type/month); delete keys are DB-safe
+  views                   Rebuild the category folders without opening yazi
+  discard-path FILE...    Delete files + record in DB (used by the yazi delete keys; [-y] skips the prompt)
+
 app commands (proxied into the running container):
   subscribe   @channel    Subscribe to a channel (pauses listener briefly)
   unsubscribe @channel    Unsubscribe from a channel
   channels                List subscribed channels
   discard                 Review downloaded files and delete unwanted ones
-  browse                  Browse, read, and delete downloaded files in a terminal UI
   history                 Show recently downloaded files
   scrape [--channel X] [--limit N] [--since DATE] [--dry-run]  Find/recover media missing from the DB (pauses listener briefly; --dry-run audits only)
   scan-languages              Detect language for untagged files; discard German ones
@@ -296,6 +393,10 @@ app commands (proxied into the running container):
     sub.add_parser("channels")
     sub.add_parser("discard")
     sub.add_parser("browse")
+    sub.add_parser("views")
+    p = sub.add_parser("discard-path")
+    p.add_argument("paths", nargs="+")
+    p.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt")
     p = sub.add_parser("history")
     p.add_argument("--limit", type=int, default=20, metavar="N")
 
@@ -338,8 +439,11 @@ app commands (proxied into the running container):
         # No listener restart needed — discard only manages local files and DB.
         sys.exit(app("discard", interactive=True))
     elif args.command == "browse":
-        # No listener restart needed — browse only manages local files and DB.
-        sys.exit(app("browse", interactive=True))
+        sys.exit(cmd_browse())
+    elif args.command == "views":
+        sys.exit(cmd_views())
+    elif args.command == "discard-path":
+        sys.exit(cmd_discard_path(args.paths, args.yes))
     elif args.command == "history":
         sys.exit(app("history", "--limit", str(args.limit)))
     elif args.command == "scrape":

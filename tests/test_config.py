@@ -121,3 +121,16 @@ class TestLoadConfig:
         p = _write_config(tmp_path, _minimal_valid())
         cfg = load_config(p)
         assert "retention_days" in cfg["download"]
+
+
+class TestViewsDirectoryDefault:
+    def test_defaults_to_data_views(self):
+        raw = _minimal_valid()
+        _apply_defaults(raw)
+        assert raw["download"]["views_directory"] == "data/views"
+
+    def test_explicit_value_is_kept(self):
+        raw = _minimal_valid()
+        raw["download"] = {"views_directory": "/srv/views"}
+        _apply_defaults(raw)
+        assert raw["download"]["views_directory"] == "/srv/views"

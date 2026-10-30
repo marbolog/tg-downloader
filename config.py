@@ -39,6 +39,8 @@ def _apply_defaults(raw: dict) -> None:
     dl = raw.setdefault("download", {})
     dl.setdefault("destination", "data/downloads")
     dl["destination"] = str(Path(dl["destination"]).expanduser())
+    dl.setdefault("views_directory", "data/views")
+    dl["views_directory"] = str(Path(dl["views_directory"]).expanduser())
     dl.setdefault("retention_days", 365)
     dl.setdefault("concurrent_downloads", 1)
     dl.setdefault("timeout_seconds", 600)
