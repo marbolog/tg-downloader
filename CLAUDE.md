@@ -63,7 +63,7 @@ CLI tool that auto-downloads media from Telegram channels as messages arrive, wi
 - **Telethon** — MTProto Telegram client (user account, not bot)
 - **cryptg** — C extension giving Telethon AES-NI hardware crypto (avoids pure-Python AES pegging ARM cores on the Pi). No code references it; Telethon auto-detects it at import.
 - **InquirerPy** — interactive checkbox file selection in the terminal (`discard`)
-- **Textual** — terminal UI framework for `tgdctl browse` (list/filter/delete/read downloaded files; PDF/EPUB reading reuses `search/chunker.py`'s existing text extraction, no new C-extension dependencies)
+- **yazi** (optional, host-side, `apt install yazi`) — terminal file manager launched by `tgdctl browse`; not a Python dependency and not in the Docker images
 - **rich** — tables, styled output
 - **PyYAML** — config file
 - **FastAPI + uvicorn** — web UI service (`webui/`)
@@ -81,7 +81,7 @@ uv run tgdctl <command>        # host-side management (Docker + DB stats)
 uv run tg-downloader <command> # app CLI (runs inside the container/venv)
 uv run python main.py <command>
 
-# app subcommands: listen | subscribe | unsubscribe | channels | discard | browse | status | history | scrape
+# app subcommands: listen | subscribe | unsubscribe | channels | discard | status | history | scrape
 ```
 
 ### File layout
@@ -93,8 +93,8 @@ uv run python main.py <command>
 | `listener.py` | Real-time listener; auto-downloads on arrival; startup backfill + flush pending; hourly retention cleanup |
 | `lang_filter.py` | Post-download language detection; auto-discards German files |
 | `ui.py` | Interactive `select_discard` checkbox UI (InquirerPy) |
-| `reader_document.py` | Adapts `search/chunker.py`'s extracted text into a reader-ready `Document` (sections + table of contents) for `reader.py` |
-| `reader.py` | Textual TUI for `tgdctl browse` — list/filter/delete downloaded files, read PDF/EPUB in the terminal |
+| `views.py` | `build_views` (symlink category folders over the flat downloads dir) and `discard_paths` (DB-safe delete); host-side, used by `tgdctl browse` |
+| `yazi/` | Isolated yazi config for `tgdctl browse` (`keymap.toml` safe-delete keys + `T` preview toggle, `yazi.toml`, `init.lua`, `plugins/toggle-pane.yazi/`, `plugins/epub-cover.yazi/` EPUB cover previewer, `discard.sh` helper) |
 | `downloader.py` | `download_item` — single-file daemon-mode download via Telethon |
 | `utils.py` | Shared helpers: `human_size`, `unique_path`, `compute_sha256`, `create_tracked_task` (asyncio fire-and-forget with strong reference + death logging) |
 | `tgdctl.py` | Host-side management CLI; wraps docker compose + proxies app commands |
@@ -127,7 +127,9 @@ uv run tgdctl progress -w            # same, live-updating every 2 seconds (Ctrl
 uv run tgdctl subscribe @channel     # subscribe to a channel
 uv run tgdctl channels               # list subscribed channels
 uv run tgdctl discard                # review downloaded files and delete unwanted ones (no listener restart needed)
-uv run tgdctl browse                 # browse, read (PDF/EPUB), and delete downloaded files in a terminal UI (no listener restart needed)
+uv run tgdctl browse                 # yazi on category folders (by channel/language/type/month); host-side, delete keys are DB-safe
+uv run tgdctl views                  # rebuild the category folders without opening yazi
+uv run tgdctl discard-path FILE...   # delete files + record in DB (what yazi's delete keys call; -y skips the prompt)
 uv run tgdctl history [--limit N]    # show recently downloaded files
 uv run tgdctl scrape --dry-run       # AUDIT: report media on Telegram missing from the DB, per channel (writes nothing)
 uv run tgdctl scrape                 # RECOVER: queue every missing file, then download it on the wrapped listener restart
@@ -139,6 +141,17 @@ uv run tgdctl scan-hashes            # compute SHA-256 for all downloaded files;
 uv run tgdctl index                  # index all downloaded files into the FTS5 search table
 ```
 Downloaded files appear in `./data/downloads/` on the host.
+
+### File browsing (`tgdctl browse`)
+Uses an existing file manager (yazi) instead of a custom TUI (a Textual app was built and removed on 2026-10-29). It runs on the **host**, not in the container, and writes the SQLite DB directly like `tgdctl status` (WAL + `busy_timeout`).
+
+- The downloads dir is one flat folder, so `views.build_views()` generates `download.views_directory` (default `data/views`, gitignored) with symlink trees `by-channel/`, `by-language/`, `by-type/`, `by-month/` (month = Telegram message date). Rebuilt from the DB on every `browse`/`views`; only those four folders are ever removed/recreated. Rows whose file is missing are skipped. yazi follows the link, so its date/sort-by-modified (`,m` / `,M`) uses the real file's mtime (verified); the Telegram message date is only available via `by-month/`. The views dir must not sit inside the downloads dir.
+- **Why deletes must go through `discard_paths`:** removing a symlink only removes the link, and removing a real file behind the app's back leaves the row `downloaded`, so the listener's "heal missing" step re-downloads it. `discard_paths` resolves symlinks, refuses anything whose real path is outside `download.destination` or is a directory, writes `mark_discarded_many(..., reason="manual:fs")` in one transaction **before** unlinking (a lock error deletes nothing), then prunes dangling links. A file in the downloads dir with no DB row is just deleted and reported as untracked.
+- `yazi/keymap.toml` is loaded only via `YAZI_CONFIG_HOME` set by `tgdctl browse` (the user's own yazi is untouched). `d`/`D`/`Delete` run `yazi/discard.sh` (`shell --block`, selected files via `%s`, confirmation prompt in the terminal); `x p P r a` are `noop`'d because moving/renaming/creating real files would desync the DB. `:` shell and `cd` out of the views dir remain possible; `discard-path` still only deletes inside the downloads dir.
+- **Preview pane is on demand (2026-10-29):** `yazi/init.lua` collapses the right pane at startup via the vendored official `toggle-pane` plugin (`yazi/plugins/toggle-pane.yazi/`, copied from `yazi-rs/plugins`, MIT; ~40 lines of pane-ratio logic, no I/O), and `T` toggles it. A zero-width pane triggers no preview rendering, so browsing costs nothing until asked. `yazi.toml` deliberately has no catch-all `prepend_previewers` rule: a `*` rule shadows the built-ins (it was the earlier "file(1) info only" setup); only `*.epub` is claimed (next bullet). When shown: PDF via `pdftoppm` (poppler-utils), images via the terminal image protocol, EPUB via our own `plugins/epub-cover.yazi` (2026-10-30). Verified headless in tmux: hidden at start, `T` reveals it, no Lua errors.
+- **EPUB preview (2026-10-30):** `yazi.toml` has one `prepend_previewers` rule, `{ url = "*.epub", run = "epub-cover" }`. The plugin's `main.lua` runs `cover.py` (stdlib-only, `python3 -I`) which finds the cover via the OPF manifest (EPUB3 `properties="cover-image"` → EPUB2 `<meta name="cover">` → id/href containing "cover"), writes the image bytes to `~/.cache/tg-downloader-yazi/<sha1 of path+mtime+size>.<ext>` and prints that path; Lua then `ya.image_show`s it. EPUBs are untrusted: members are read as bytes (never extracted by name) with size caps. No cover / corrupt file → a text message in the pane (exit 1 / 2). The plugin locates `cover.py` via `YAZI_CONFIG_HOME` (plugins aren't told their directory), so it only works under `tgdctl browse`. Tested by `tests/test_epub_cover.py`; verified headless in tmux that the previewer runs and error cases render text (tmux can't show the image itself — check a real image-capable terminal for the cover).
+- yazi 26.x uses `[mgr]` (not `[manager]`) in `keymap.toml`. `show_symlink = false` hides the `-> /long/target` text.
+- Files on disk with no `downloaded` row (observed 2026-10-29: 549 files / 19.6 GB, e.g. left over from discarded/legacy rows) are not in the views, since views are DB-driven.
 
 ### Web UI
 A second Docker service (`webui`) runs a FastAPI app on **port 8090** of the host:
@@ -157,20 +170,6 @@ Features:
 - Duplicate detection: by default shows one copy per unique file (identified by SHA-256 hash, falling back to filename+size); cards show an "N×" amber badge when more copies exist. Toggle with the "Hide dupes / Show dupes" button.
 - Thumbnails are cached in `data/thumbs/` and generated on first request
 - **In-browser PDF reader** — click "📖 Read" on any PDF card (or a paged search hit) to open a full-screen reader instead of downloading. Mobile-first: continuous vertical scroll with lazy per-page canvas rendering (`IntersectionObserver`), fit-width zoom (buttons + pinch), `#page=N` / search-result deep links, and a manual region-crop tool to isolate a single article (works on scanned PDFs too, since it operates on rendered pixels, not text). Backend: `GET /api/pdf/{id}` serves the file inline (`Content-Disposition: inline`) with HTTP Range support via `FileResponse`, so large magazines stream progressively; 404s if the row is missing, the file isn't on disk, or `ext != 'pdf'`. Frontend: `webui/static/reader.js` (single entry point `window.openReader(mediaId, { page })`) + `webui/static/reader.css`, built on **pdf.js 6.1.200** vendored at `webui/static/vendor/pdfjs/` (legacy ESM build, no npm/bundler — matches the project's no-build-step convention). EPUB has no reader; the Download button remains its only action. Design rationale in `docs/superpowers/specs/2026-06-30-pdf-reader-design.md`.
-
-### Terminal browse/reader (`tgdctl browse`, `reader.py`)
-Textual TUI: `LibraryScreen` (filterable table) pushes `ReaderScreen` for PDF/EPUB rows; text comes from `reader_document.build_document()`, which wraps `search/chunker.py`'s existing extraction (no separate parsing path — if search finds text, the reader shows the same text).
-
-**Gotcha for any future `Static`/`Label` added here**: they default to `markup=True`, which parses their content as Rich console markup. Untrusted document text is full of bracketed substrings — citations (`[1]`), footnotes (`[Note]`), code (`arr[i]`) — that Rich's parser silently treats as (invalid) style tags and **drops without raising**, rather than displaying literally. This isn't a chunker/extraction bug (the FTS index sees the full text); it only manifests in the terminal reader's rendering. Every `Static`/`Label` that renders document-derived or filename-derived text passes `markup=False`. Regression test: `tests/test_reader.py::test_reader_screen_preserves_bracketed_text_as_literal_not_markup`.
-
-**`LibraryScreen` interaction model is ranger/mc/vim-inspired, not modal-dialog-based** (redesigned 2026-09-18; there is no `ConfirmDeleteScreen` or any other modal in this screen anymore):
-- `j`/`k` move the cursor, `g`/`G` jump to top/bottom — added as `LibraryScreen`-level bindings that call `DataTable.action_cursor_down/up`/`move_cursor` directly, since `DataTable` itself only binds arrow keys.
-- `space` toggles a mark (`●`, a leading table column) on the cursor row; marks persist as you move. `v` starts a visual range from the cursor — `j`/`k` extend it, `space` commits the whole range into marks, `Esc` aborts without marking. Marking uses `DataTable.update_cell()` for a single cell, not a full `_apply_filters()` rebuild — rebuilding via `table.clear()`+`add_row` resets `cursor_coordinate` to `(0, 0)`, which would make it impossible to mark-then-move-then-mark-again.
-- `d` deletes every marked row, or just the cursor row if nothing is marked. Confirmation is a docked one-line status bar (`#status-bar`, `Static(markup=False)`, shown/hidden via `.display`) reading `Delete N files? [y/N]` — never a `ModalScreen`. Only `y`/`n`/`Esc` resolve it; other keys are no-ops while it's up (`_interaction_locked()`), so a stray keypress can't half-apply a pending delete.
-- `q` is `action_quit_smart`: cancels an active delete-prompt or visual-selection first (so it never accidentally exits when the user meant "back out of this"), and only calls `self.app.exit()` once nothing is pending — `LibraryScreen` is the top-level screen, so "back out" there means "quit," matching ranger/mc.
-- Batch delete reuses the same "DB write before disk unlink, single transaction" pattern as the earlier single-file delete and the web UI's `POST /api/discard` (`db.mark_discarded_many()` once for every valid id, then unlink files, so a lock error can't leave files deleted-on-disk-but-still-`downloaded`-in-DB).
-- `Binding(..., show=False)` is required (not the `("key", "action", "desc")` 3-tuple shorthand) for bindings that shouldn't clutter the footer, e.g. `y`/`n`/`Esc` — the plain-tuple form only accepts 2 or 3 elements, so a 4th `show` positional raises `BindingError` at class-definition time.
-- **Test flakiness gotcha**: a rapid `press("j"); press("j"); press("space")` sequence (move twice, then read the cursor position to mark) was intermittently flaky *only under full-suite load*, never in isolation — `Pilot.press()`'s internal `_wait_for_screen()` snapshots child widgets once and waits for that batch's `call_later` callbacks, which can miss a second wave of cascading messages under contention. `Pilot.pause()` (which adds `wait_for_idle(0)` on top) is the stronger barrier; the affected tests call it between the moves and the mark/commit for exactly this reason. If a future test doing move-then-read-cursor-state flakes only in the full suite, this is the first thing to check.
 
 ### Search
 Full-text search over the downloaded library. Always enabled — zero startup cost. (The web UI and CLI previously also offered an "Ask AI" natural-language Q&A mode built on this index via the Anthropic API; it was removed — plain FTS search below is all that remains.)
@@ -276,7 +275,7 @@ The detected language is stored in `media_messages.language` (ISO 639-1 code, nu
 
 **Operational gotcha**: never wrap `tgdctl scrape` in `timeout`. The wrapper stops the listener, runs the audit in a `--rm` container, then restarts the listener; killing the wrapper leaves the listener stopped and the audit's output is lost when the container exits. Run it in the background without a timeout.
 
-**`discard_reason`** (nullable TEXT, added via `_MIGRATIONS`): set by `mark_discarded(_many)(..., reason=)`. Values: `german`, `topic:<name>`, `newspaper`, `message_deleted` (Telegram message gone before download), `manual:cli|webui|tui`. Retroactive `scan-*` commands use the same `german`/`topic:`/`newspaper` values as the live path. Rows discarded before the column existed are NULL and reported as `unknown` by `db.discard_reason_counts()`, which the hourly heartbeat logs as `Discards by reason: {...}`. Any new discard path must pass a reason.
+**`discard_reason`** (nullable TEXT, added via `_MIGRATIONS`): set by `mark_discarded(_many)(..., reason=)`. Values: `german`, `topic:<name>`, `newspaper`, `message_deleted` (Telegram message gone before download), `manual:cli|webui|fs`. Retroactive `scan-*` commands use the same `german`/`topic:`/`newspaper` values as the live path. Rows discarded before the column existed are NULL and reported as `unknown` by `db.discard_reason_counts()`, which the hourly heartbeat logs as `Discards by reason: {...}`. Any new discard path must pass a reason.
 
 ### Known constraints
 - Can only watch channels the authenticated user is a member of. The `subscribe` command adds the channel to the DB but does not join it; use the Telegram app to join first.

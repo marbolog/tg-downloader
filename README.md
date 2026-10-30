@@ -1,222 +1,121 @@
 # tg-downloader
 
-A Telegram client that watches channels in real time, keeps track of every media file that appears, and lets you decide which ones to download — whenever you want.
+Watches Telegram channels with your user account and **automatically downloads** every media file as it arrives. Downloads are filtered (language, topic, newspapers), indexed for full-text search, cleaned up after a retention period, and can be browsed from a web UI or a terminal file manager.
 
 ## How it works
 
-The tool has two separate concerns:
-
-**Listener** (always running): connects to Telegram as your user account, watches subscribed channels, and silently records every incoming media message to a local SQLite database.
-
-**Download** (on demand): you run a single command to open an interactive checklist of everything that has accumulated. Select the files you want and they are downloaded in one shot.
+- **Listener** (always running, in Docker): connects to Telegram, downloads new media in real time, and records every file in a local SQLite database. On each start it flushes pending items, re-downloads files that vanished from disk, and backfills anything missed while it was offline. An hourly backfill and a daily deep reconcile catch messages that real-time delivery dropped.
+- **Filters** (after each download): German-language files, configurable topic keywords and newspaper/periodical-shaped files are discarded automatically. Only PDF and EPUB are inspected.
+- **Search**: PDF pages and EPUB chapters are indexed in SQLite FTS5 (BM25, accent-insensitive).
+- **Retention**: files older than `download.retention_days` are deleted hourly.
+- **Web UI** (port 8090): thumbnails, filters, duplicate detection, an in-browser PDF reader, search, delete and download.
+- **`tgdctl browse`**: yazi on generated category folders, with safe delete and PDF/EPUB/image previews.
 
 ## Requirements
 
 - Docker and Docker Compose (recommended), **or** Python 3.11+ with [uv](https://docs.astral.sh/uv/)
-- A Telegram account
-- API credentials from [my.telegram.org](https://my.telegram.org)
-
-### Getting your API credentials
-
-1. Go to [my.telegram.org](https://my.telegram.org) and log in
-2. Open **API Development tools**
-3. Create an application (name and description do not matter)
-4. Copy the `api_id` (a number) and `api_hash` (a hex string)
+- A Telegram account that is already a member of the channels you want
+- API credentials from [my.telegram.org](https://my.telegram.org) → **API Development tools** → create an app → copy `api_id` and `api_hash`
+- Optional, for `tgdctl browse`: [yazi](https://yazi-rs.github.io/) (`apt install yazi`) and `poppler-utils` (PDF previews)
 
 ## Setup
 
-### 1. Configure
-
 ```bash
-cp config.yaml.example config.yaml
-```
-
-Edit `config.yaml`:
-
-```yaml
-telegram:
-  api_id: 12345
-  api_hash: "your_api_hash_here"
-  session_file: "data/tg_session"    # where the Telegram session is stored
-
-download:
-  destination: "data/downloads"      # where downloaded files are saved
-
-filters:
-  extensions: []   # empty = track all types; e.g. ["pdf", "mp4", "jpg"]
-```
-
-Channels are **not** configured here — they are managed at runtime with the `subscribe` command.
-
-### 2. Create the data directory
-
-```bash
+cp config.yaml.example config.yaml    # fill in api_id and api_hash
 mkdir -p data/downloads
-```
-
-### 3. Install dependencies
-
-```bash
 uv sync
+uv run tgdctl auth                    # one-time phone + code login; Ctrl+C once connected
+uv run tgdctl start                   # build and start the listener (restart: always)
+uv run tgdctl subscribe @channel      # you must already be a member on Telegram
 ```
 
-## Running with Docker (recommended)
+The session is saved to `data/tg_session.session` and reused. Treat it and `config.yaml` like passwords (both are git-ignored). `config.yaml.example` documents every option: `download.*` (destination, retention, concurrency, timeout, views directory), `filters.*` (extensions, `discard_topics`, `discard_newspapers`, `newspaper_names`) and `search.top_k`.
 
-### First-time Telegram authentication
+> Keep `concurrent_downloads: 1` on a Raspberry Pi: Telethon's crypto pegs ARM cores otherwise.
 
-Before starting the background service, authenticate once interactively:
+## `tgdctl` commands
+
+`tgdctl` runs on the host and wraps Docker; use it instead of the app commands while the container is up (they share one Telegram session).
+
+| Group | Command | What it does |
+|---|---|---|
+| Service | `start` / `stop` / `restart` | Control the listener container |
+| | `logs [-n]` | Tail logs (`-n` prints and exits) |
+| | `auth` | First-time Telegram login |
+| | `status` | Container state and per-channel stats (works with the container stopped) |
+| | `progress [-w]` | Overall progress bar and recent files; `-w` live-updates |
+| Channels | `subscribe @ch` / `unsubscribe @ch` / `channels` | Manage subscriptions (also accepts `https://t.me/...` or a numeric id) |
+| Files | `history [--limit N]` | Recently downloaded files |
+| | `discard` | Interactive checklist to delete unwanted files (file + DB record) |
+| | `browse` | yazi on category folders, see below |
+| | `views` | Rebuild the category folders without opening yazi |
+| | `discard-path FILE... [-y]` | Delete files and record it in the DB (what yazi's delete keys call) |
+| Recovery | `scrape --dry-run` | Audit: media on Telegram missing from the DB, per channel (writes nothing) |
+| | `scrape [--channel X] [--limit N] [--since DATE]` | Queue every missing file; downloaded on the listener restart |
+| Maintenance | `scan-languages`, `scan-topics`, `scan-newspapers` | Apply the filters retroactively |
+| | `scan-hashes` | SHA-256 for every file; enables duplicate detection in the web UI |
+| | `index` | Index existing files into the search table |
+
+> Never wrap `tgdctl scrape` in `timeout`: it stops the listener, runs, then restarts it, and killing it midway leaves the listener stopped.
+
+Without Docker: `uv run tg-downloader <listen|subscribe|unsubscribe|channels|discard|status|history|scrape>`.
+
+## Browsing files in the terminal
 
 ```bash
-uv run tgdctl auth
+uv run tgdctl browse
 ```
 
-Enter your phone number (with country code, e.g. `+39...`) and the code Telegram sends to your app. Once connected and the listener starts, press `Ctrl+C`. The session is saved to `data/tg_session.session` and reused from this point on.
+Builds `data/views/` (symlinks grouped `by-channel/`, `by-language/`, `by-type/`, `by-month/`) and opens yazi on it with an isolated config (your own yazi is untouched).
 
-### Start the background service
+- `d` / `D` / `Delete` delete the marked or hovered files **and** record them in the database, so the listener never re-downloads them. `x p P r a` are disabled because moving or renaming real files would desync the DB.
+- `T` shows or hides the preview pane (hidden at startup so browsing stays fast on a Pi). PDF: first page. Image: the image (needs a terminal image protocol). **EPUB: the cover image**, from `yazi/plugins/epub-cover.yazi`; a book without a declared cover shows a text message.
+- EPUBs are untrusted input: the cover helper reads archive members as bytes, caps sizes, refuses XML with a DTD/entities, and caches covers in `~/.cache/tg-downloader-yazi/`.
 
-```bash
-uv run tgdctl start
-```
+Full illustrated guide: <https://marbolog.github.io/tgdctl-browse/>
 
-Builds the Docker image and starts the listener as a background service with `restart: always` — it survives crashes and server reboots.
+## Web UI
 
-## Managing the service with `tgdctl`
+`http://<host>:8090`. Set `WEBUI_PASSWORD` (and optionally `WEBUI_USERNAME`, default `tg`) in a `.env` next to `docker-compose.yml` to enable HTTP Basic Auth; unset means no auth.
 
-`tgdctl` is the host-side management tool. Always use it instead of running app commands directly — it handles the Docker lifecycle and avoids Telegram session conflicts.
+Card grid with PDF/EPUB cover thumbnails, channel and language filters, language badges, duplicate collapsing, multi-select delete, per-file download, full-text search, and a mobile-friendly PDF reader (lazy pages, zoom, deep links to a page, region crop).
 
-### Service control
+## Reliability notes
 
-```bash
-uv run tgdctl start      # build and start the listener container
-uv run tgdctl stop       # stop the container
-uv run tgdctl restart    # restart the listener
-uv run tgdctl logs       # tail container logs (Ctrl+C to stop)
-uv run tgdctl logs -n    # print recent logs and exit
-uv run tgdctl status     # container state + per-channel download stats
-```
-
-### Subscribe to a channel
-
-```bash
-uv run tgdctl subscribe @channel_username
-uv run tgdctl subscribe https://t.me/channel_username
-uv run tgdctl subscribe -1001234567890    # numeric ID, for private channels
-```
-
-> You must already be a member of the channel on Telegram.
-
-The listener is briefly paused while the channel is resolved, then automatically restarted. New subscriptions take effect immediately.
-
-### List subscribed channels
-
-```bash
-uv run tgdctl channels
-```
-
-```
-         Subscribed Channels
-┌──────────────┬──────────────┬─────────┬────────────┐
-│ Title        │ Identifier   │ Pending │ Since      │
-├──────────────┼──────────────┼─────────┼────────────┤
-│ My Channel   │ @mychannel   │      12 │ 2024-11-01 │
-│ Tech News    │ @technews    │       3 │ 2024-11-03 │
-└──────────────┴──────────────┴─────────┴────────────┘
-```
-
-### Download pending media
-
-```bash
-uv run tgdctl download
-```
-
-The listener pauses briefly, then an interactive checklist opens with everything that has accumulated:
-
-```
-Space=toggle  A=select all  ↑↓=navigate  Enter=confirm
-
-? Select media to download (15 pending):
- ❯ ◯ [My Channel]  report_2024.pdf  (2.1 MB, .pdf, 2024-11-10)
-   ◯ [My Channel]  lecture_01.mp4   (210.0 MB, .mp4, 2024-11-09)
-   ◯ [Tech News]   diagram.png  [interesting chart]  (340.0 KB, .png, 2024-11-08)
-   ...
-```
-
-Selected files are downloaded with progress bars and marked as downloaded. Unselected files remain pending and appear again next time. The listener restarts automatically when done.
-
-### Skip pending media
-
-```bash
-uv run tgdctl skip
-```
-
-Same interactive checklist as `download`, but marks the selected items as skipped instead of downloading them. Skipped files no longer appear in the pending list.
-
-### View download history
-
-```bash
-uv run tgdctl history           # last 20 downloads
-uv run tgdctl history --limit 50
-```
-
-### Download stats
-
-```bash
-uv run tgdctl status
-```
-
-Shows container state and a per-channel breakdown of pending, downloaded, and skipped file counts. Reads the database directly — works even when the container is stopped.
-
-### Unsubscribe from a channel
-
-```bash
-uv run tgdctl unsubscribe @channel_username
-```
-
-Removes the channel from tracking. Previously recorded media messages are kept in the database.
-
-## Running locally (without Docker)
-
-```bash
-uv sync
-uv run tg-downloader listen           # start the listener
-uv run tg-downloader subscribe @channel
-uv run tg-downloader channels
-uv run tg-downloader download
-uv run tg-downloader skip
-uv run tg-downloader history
-uv run tg-downloader status
-uv run tg-downloader unsubscribe @channel
-```
-
-> Do not run these commands while the Docker listener is running — they share the same Telegram session file and will conflict. Use `tgdctl` when Docker is active.
+- `restart: always` restarts crashed containers; the `autoheal` service also restarts the listener if its healthcheck fails (a hung process does not exit by itself). The healthcheck fails when `data/.heartbeat` is older than 90 minutes; the listener touches it after every processed item.
+- The listener logs an hourly summary (downloaded, `+N/h`, pending, discards by reason). A flat `+0/h` is normal for quiet channels; check the newest `media_messages.date` before assuming a stall.
+- Every discard records a reason (`german`, `topic:<name>`, `newspaper`, `message_deleted`, `manual:cli|webui|fs`).
 
 ## Project structure
 
 ```
-tg-downloader/
-├── main.py              # entry point and CLI subcommands
-├── config.py            # load and validate config.yaml
-├── db.py                # SQLite schema and queries
-├── listener.py          # real-time Telethon event handler
-├── ui.py                # interactive file selection
-├── downloader.py        # download selected files with progress bars
-├── utils.py             # shared helpers
-├── tgdctl.py            # host-side management CLI
-├── config.yaml.example  # template — copy to config.yaml to get started
-├── pyproject.toml       # dependencies managed by uv
-├── Dockerfile
-└── docker-compose.yml
+main.py            app CLI entry point and subcommands
+config.py          load and validate config.yaml
+db.py              SQLite schema and all queries (shared with the web UI)
+listener.py        real-time listener, backfill, reconcile, retention, heartbeat
+downloader.py      single-file download with timeouts
+lang_filter.py     language, topic and newspaper detection
+views.py           category symlink folders and DB-safe delete
+tgdctl.py          host-side management CLI
+ui.py              interactive discard checklist
+utils.py           shared helpers
+search/            FTS5 chunking (PDF pages, EPUB chapters) and indexing
+webui/             FastAPI app, static SPA, PDF reader, own Dockerfile
+yazi/              isolated yazi config, key bindings, plugins (toggle-pane, epub-cover)
+tests/             pytest suite
+docs/superpowers/  design specs and implementation plans
 ```
+
+`CLAUDE.md` holds the detailed engineering notes (incidents, invariants, design rationale).
 
 ## Data layout
 
-Everything lives in `./data/` on the host, bind-mounted into the container:
-
 ```
 data/
-  tg_session.session    — Telegram auth session
-  tg_downloader.db      — SQLite database (channels + media message history)
-  downloads/            — downloaded files
+  tg_session.session   Telegram auth session
+  tg_downloader.db     SQLite database (WAL mode)
+  downloads/           downloaded files (flat)
+  views/               generated category symlinks (safe to delete)
+  thumbs/              cached web UI thumbnails
+  .heartbeat           healthcheck marker
 ```
-
-> **Security**: treat `tg_session.session` and `config.yaml` like passwords — they give full access to your Telegram account. Both are excluded from git via `.gitignore`.
